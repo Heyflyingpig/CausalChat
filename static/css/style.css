@@ -203,6 +203,18 @@
         color: #888;
     }
 
+    .sidebar-button {
+        padding: 10px 40px;
+        border: none;  
+        background-color: #007bff;
+        color: white;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 1em;
+    }
+    .sidebar-button:hover {
+        background-color: #0056b3;
+    }
     /* 新增：覆盖层样式 ，用于隐藏主聊天界面*/
     #authOverlay {
         position: fixed;

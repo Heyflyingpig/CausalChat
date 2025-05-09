@@ -204,10 +204,10 @@ async function checkLoginStatus() {
     }
 }
 
-// 更新用户界面信息（例如头像区域） - **修改**
+// 更新用户界面信息（例如头像区域） - 
 function updateUserInfo() {
     // const loggedInUser = localStorage.getItem('loggedInUser'); // <-- 移除
-    if (currentUsername) { // **修改**: 使用全局变量
+    if (currentUsername) { // : 使用全局变量
         userAvatar.textContent = currentUsername.charAt(0).toUpperCase(); // 显示用户名首字母
         userInfoContent.textContent = `账号: ${currentUsername}`; // 设置弹窗内容
     } else {
@@ -314,7 +314,6 @@ document.getElementById('messageInput').addEventListener('keypress', (e) => {
 async function sendMessage() {
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
-    // const loggedInUser = localStorage.getItem('loggedInUser'); // <-- 移除
     const loggedInUser = currentUsername; // **修改**: 使用全局变量
 
     if (!message) return;
@@ -332,7 +331,7 @@ async function sendMessage() {
         const response = await fetch('/api/send', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            // **修改：** 发送消息和用户名 (这里逻辑不变，因为之前已从变量获取)
+            //  发送消息和用户名 (这里逻辑不变，因为之前已从变量获取)
             body: JSON.stringify({ message: message, username: loggedInUser })
         });
 
@@ -400,31 +399,6 @@ function newChat() {
     }
 }
 
-// API 切换 - **修改** (虽然API切换本身不需要用户，但检查登录状态需要)
-document.getElementById('apiSelect').addEventListener('change', async (e) => {
-     // const loggedInUser = localStorage.getItem('loggedInUser'); // <-- 移除
-     const loggedInUser = currentUsername; // **修改**: 使用全局变量检查登录
-     if (!loggedInUser) {
-         showError("请先登录再切换 API！"); // 提示用户
-         // 可以选择将下拉列表重置回之前的值
-         // e.target.value = previousApiValue; // (需要保存之前的API值)
-         return;
-     }
-
-    try {
-        await fetch('/api/switch', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ api: e.target.value })
-        });
-         console.log(`API 已切换为 ${e.target.value}`);
-         // previousApiValue = e.target.value; // 保存当前值
-    } catch (error) {
-         showError('切换 API 时出错: ' + error);
-         // e.target.value = previousApiValue; // 出错时恢复
-    }
-});
-
 // 新增侧边栏切换功能 - **修改**
 function toggleSidebar() {
     // if (!localStorage.getItem('loggedInUser')) return; // <-- 移除
@@ -442,7 +416,7 @@ function toggleSidebar() {
 // 加载历史记录 (修改为加载当前用户的历史) - **修改**
 function loadHistory() {
      // const loggedInUser = localStorage.getItem('loggedInUser'); // <-- 移除
-     const loggedInUser = currentUsername; // **修改**: 使用全局变量
+     const loggedInUser = currentUsername; //  使用全局变量
      if (!loggedInUser) {
          console.log("用户未登录，不加载历史记录。");
          historyList.innerHTML = '<p style="padding: 10px; color: #888;">请先登录以查看历史记录。</p>';
@@ -450,7 +424,7 @@ function loadHistory() {
      }
 
     console.log(`为用户 ${loggedInUser} 加载历史记录...`);
-    // **修改：** 在请求中加入用户名 (这里逻辑不变，因为之前已从变量获取)
+    //  在请求中加入用户名 (这里逻辑不变，因为之前已从变量获取)
     fetch(`/api/sessions?user=${encodeURIComponent(loggedInUser)}`)
         .then(response => response.json())
         .then(data => {
@@ -508,17 +482,17 @@ document.addEventListener('DOMContentLoaded', () => {
     checkLoginStatus(); // 检查登录状态 (这个函数现在会调用 /api/check_auth)
 });
 
-// 加载特定会话内容 (修改为需要用户名) - **修改**
+// 加载特定会话内容 (修改为需要用户名) - 
 async function loadSession(sessionId, username) { // 参数 username 仍然需要
      // const loggedInUser = currentUsername; // 可以用全局变量再次确认，但参数传递更直接
-     if (!username || username !== currentUsername) { // **修改**: 做个检查，确保是当前登录用户在操作
+     if (!username || username !== currentUsername) { //  做个检查，确保是当前登录用户在操作
          showError("无法加载会话：用户状态异常或权限不足。");
          console.warn(`尝试加载会话 ${sessionId} 但参数用户 ${username} 与当前登录用户 ${currentUsername} 不匹配。`);
          return;
      }
     console.log(`用户 ${username} 尝试加载会话: ${sessionId}`);
     try {
-        // **修改：** 在请求中加入用户名 (这里逻辑不变)
+        //  在请求中加入用户名 (这里逻辑不变)
         const response = await fetch(`/api/load_session?session=${sessionId}&user=${encodeURIComponent(username)}`);
         const data = await response.json();
 
@@ -533,8 +507,7 @@ async function loadSession(sessionId, username) { // 参数 username 仍然需�
 
             // 确保滚动到底部
             chatArea.scrollTop = chatArea.scrollHeight;
-            // (可选) 加载成功后关闭侧边栏
-            // 这里有个小问题：如果侧边栏本来就没开，toggle 会把它打开
+        
             const sidebar = document.getElementById('sidebar');
             if (sidebar.classList.contains('active')) {
                  toggleSidebar();

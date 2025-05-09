@@ -4,8 +4,7 @@
 <head>
     <title>FLYINGPIG-AI</title> <!-- 添加标题 -->
     <link rel="stylesheet" href="static/css/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js">
-        //从 jsDelivr 这个 CDN 服务商提供的地址去下载 marked.js 这个库文件
+    <script src="static/js/marked.min.js">
     </script>
 </head>
 <body>
@@ -95,12 +94,7 @@
         <div class="sidebar-content">
             <!-- 这个 div 使用了 `style` 属性来直接设置内联样式。这通常用于特定、小范围或动态的样式设置。 -->
             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <select id="apiSelect" style="flex:1;">
-                    <option value="zhipuai">质谱AI</option>
-                    <option value="aliyunai">阿里云AI</option>
-                    <option value="deepseek">Deepseek</option>
-                </select>
-                <button onclick="newChat()">新建</button>
+                <button onclick="newChat()" class="sidebar-button">新建对话</button>
             </div>
             
             <div id="historyList">

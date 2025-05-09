@@ -3,11 +3,11 @@ from flask import Flask, jsonify, request, send_from_directory
 from openai import OpenAI
 import subprocess
 import os
-import sqlite3 # <-- 新增：导入 sqlite3 模块
+import sqlite3 
 import uuid
 from datetime import datetime
 import logging
-import json # <-- 导入 json 模块
+import json 
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,10 +21,13 @@ SETTING_DIR = os.path.join(BASE_DIR, "setting")
 DATABASE_PATH = os.path.join(BASE_DIR, "chat_app.db") # <-- 新增：数据库文件路径
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json") # <-- 新增：配置文件路径
 
-
 current_logged_in_user = None # <-- 新增：全局变量
+current_api = "zhipuai"
+current_model = "glm-4-flash"
+BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
+apikey = "49520ba1c63a183b4c6333b4b4d523fe.9C6LVcy8IPz80pyf"
 
-# --- 新增：配置文件读写函数 ---
+
 
 def load_config():
     """从 config.json 加载配置"""
@@ -60,29 +63,6 @@ def save_config(config_data):
 config = load_config() # 加载初始配置并设置 current_logged_in_user
 
 
-# 初始化用户文件和历史文件（如果不存在，则创建并添加表头）
-# def initialize_files():
-#     if not os.path.exists(USERS_PATH):
-#         try:
-#             with open(USERS_PATH, "w", newline="", encoding="utf-8") as f:
-#                 writer = csv.writer(f)
-#                 writer.writerow(["username", "password_hash"]) # 添加表头
-#             logging.info(f"用户文件已创建: {USERS_PATH}")
-#         except IOError as e:
-#             logging.error(f"无法创建用户文件 {USERS_PATH}: {e}")
-
-#     if not os.path.exists(HISTORY_PATH):
-#         try:
-#             with open(HISTORY_PATH, "w", newline="", encoding="utf-8") as f:
-#                 writer = csv.writer(f)
-#                 # **修改：** 添加 username 列
-#                 writer.writerow(["session_id", "username", "user_msg", "ai_msg", "timestamp"]) # 添加表头
-#             logging.info(f"聊天历史文件已创建: {HISTORY_PATH}")
-#         except IOError as e:
-#             logging.error(f"无法创建聊天历史文件 {HISTORY_PATH}: {e}")
-
-# initialize_files() # 程序启动时检查并初始化文件 # <-- 移除
-
 # --- 新增：数据库辅助函数 ---
 def get_db_connection():
     """创建并返回一个数据库连接。"""
@@ -91,36 +71,41 @@ def get_db_connection():
     return conn
 
 def initialize_database():
-    """初始化数据库，创建必要的表（如果不存在）。"""
     try:
         with get_db_connection() as conn: # 使用 with 语句确保连接自动关闭
             cursor = conn.cursor()
             # 创建用户表
+            # 自动增加id
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,  
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             # 创建聊天记录表
+            # 这里的username未来可能需要更换为id
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
-                    username TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
                     user_msg TEXT,
                     ai_msg TEXT,
                     timestamp TIMESTAMP NOT NULL,
-                    FOREIGN KEY (username) REFERENCES users (username) -- 可选，但建议用于数据完整性
+                    FOREIGN KEY (user_id) REFERENCES users (id)
                 )
             """)
-            # 为 chat_messages 表的 session_id, username, timestamp 创建索引以提高查询效率
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session_user_time ON chat_messages (session_id, username, timestamp)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_user_session_time ON chat_messages (username, session_id, timestamp DESC)")
+            # 为 chat_messages 表的 session_id, user_id, timestamp 创建索引以提高查询效率
+            # 这里的命名规则是人为定的
+            cursor.execute("DROP INDEX IF EXISTS idx_chat_messages_session_user_time")
+            cursor.execute("DROP INDEX IF EXISTS idx_chat_messages_user_session_time")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session_userid_time ON chat_messages (session_id, user_id, timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_userid_session_time ON chat_messages (user_id, session_id, timestamp DESC)")
 
-            conn.commit()
+            conn.commit()# 提交事务，保存
+        
         logging.info(f"数据库已初始化: {DATABASE_PATH}")
     except sqlite3.Error as e:
         logging.error(f"数据库初始化失败: {e}")
@@ -129,42 +114,22 @@ def initialize_database():
 initialize_database() # 程序启动时检查并初始化数据库
 
 # 全局状态
-current_api = "zhipuai"
-temperature = 1.0
-BASE_URL = "http://localhost:9090/v1"
-MODEL_MAPPING = {
-    "zhipuai": "glm-4-flash",
-    "aliyunai": "Qwen/Qwen2.5-7B-Instruct",
-    "deepseek": "deepseek-chat"
-}
 
 # --- 新增：用户认证相关函数 ---
 
 # 查找用户
 def find_user(username):
-    # if not os.path.exists(USERS_PATH):
-    #     return None
-    # try:
-    #     with open(USERS_PATH, "r", newline="", encoding="utf-8") as f:
-    #         reader = csv.reader(f)
-    #         next(reader) # 跳过表头
-    #         for row in reader:
-    #             if len(row) >= 1 and row[0] == username:
-    #                 return row # 返回整行 [username, password_hash]
-    # except StopIteration: # 文件为空（只有表头）
-    #     return None
-    # except Exception as e:
-    #     logging.error(f"读取用户文件时出错: {e}")
-    #     return None
-    # return None
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT username, password_hash FROM users WHERE username = ?", (username,))
+            # 同时选择 id, username, 和 password_hash
+            # 这里的数据库语法是说：？是占位符，username是变量，可以防止恶意注入
+            cursor.execute("SELECT id, username, password_hash FROM users WHERE username = ?", (username,))
             user_row = cursor.fetchone()
             if user_row:
-                # 返回与之前 CSV 格式兼容的元组 (username, password_hash)
-                return (user_row["username"], user_row["password_hash"])
+                # 返回一个字典，包含 id, username 和 password_hash
+                return {"id": user_row["id"], "username": user_row["username"], "password_hash": user_row["password_hash"]}
             return None
     except sqlite3.Error as e:
         logging.error(f"查找用户 '{username}' 时数据库出错: {e}")
@@ -191,7 +156,7 @@ def register_user(username, hashed_password):
         logging.error(f"注册用户 '{username}' 时数据库出错: {e}")
         return False, "注册过程中发生服务器错误。"
 
-
+# 获取注册值
 @app.route('/api/register', methods=['POST'])
 def handle_register():
     data = request.json
@@ -215,6 +180,7 @@ def handle_register():
     else:
         return jsonify({'success': False, 'error': message}), 400 # 用户名已存在等是客户端错误
 
+
 @app.route('/api/login', methods=['POST'])
 def handle_login():
     global current_logged_in_user # 声明要修改全局变量
@@ -231,15 +197,16 @@ def handle_login():
         return jsonify({'success': False, 'error': '用户名不存在'}), 401 # 401 Unauthorized
 
     # 比较哈希值
-    stored_hashed_password = user_data[1]
+    stored_hashed_password = user_data["password_hash"]
     if stored_hashed_password == hashed_password_from_client:
         logging.info(f"用户登录成功: {username}")
         # --- 修改：更新并保存配置 ---
+        # 这里是检测目前登录的用户
         current_logged_in_user = username # 更新全局变量
         config["logged_in_user"] = username # 更新配置字典
         save_config(config) # 保存到文件
         # --------------------------
-        return jsonify({'success': True, 'username': username}) # 可以返回用户名确认
+        return jsonify({'success': True, 'username': username}) # 保持现有返回结构
     else:
         logging.warning(f"用户登录失败（密码错误）: {username}")
         return jsonify({'success': False, 'error': '密码错误'}), 401 # 401 Unauthorized
@@ -270,7 +237,7 @@ def check_auth():
         logging.debug("检查认证状态：无用户登录")
         return jsonify({'isLoggedIn': False})
 
-# --- 修改现有 API 以关联用户 ---
+
 
 # 利用flask的jsonify的框架，将后端处理转发到前端
 @app.route('/api/send', methods=['POST'])
@@ -283,61 +250,27 @@ def handle_message():
          logging.warning("收到发送消息请求，但缺少用户名")
          return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
 
-    logging.info(f"用户 {username} 发送消息: {user_input[:50]}...") # 日志记录
+    user_data = find_user(username) # 获取用户数据，包括 id
+    if not user_data:
+        logging.error(f"处理消息时用户 '{username}' 未找到。")
+        return jsonify({'success': False, 'error': '用户认证失败'}), 401
+    
+    user_id = user_data['id'] # 提取 user_id
+
+    logging.info(f"用户 {username} (ID: {user_id}) 发送消息: {user_input[:50]}...") # 日志记录
 
     try:
         response = ai_call(user_input)
-        # **修改：** 传递用户名给 save_chat
-        save_chat(username, user_input, response)
+        #传递 user_id 给 save_chat
+        save_chat(user_id, user_input, response)
         return jsonify({'success': True, 'response': response})
     except Exception as e:
-        logging.error(f"处理用户 {username} 消息时出错: {e}")
+        logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}")
         return jsonify({'success': False, 'error': f'处理消息时出错: {e}'}), 500
-
-@app.route('/api/switch', methods=['POST'])
-def switch_api():
-    # 此操作通常是全局的，但最好也确认用户已登录（虽然前端会检查）
-    # data = request.json
-    # username = data.get('username') # 如果需要记录谁切换的
-    # if not username: return jsonify({'success': False, 'error': '需要登录'}), 401
-
-    global current_api
-    api = request.json.get('api')
-    logging.info(f"API 切换请求: {api}")
-    if api in MODEL_MAPPING:
-        current_api = api
-        logging.info(f"API 已切换为: {current_api}")
-        return jsonify({'success': True})
-    else:
-        logging.warning(f"尝试切换到无效 API: {api}")
-        return jsonify({'success': False, 'error': '无效的 API 名称'}), 400
-
-
-# 温度设置类似，也应该是登录后操作  b
-@app.route('/api/temperature', methods=['POST'])
-def set_temperature():
-    global temperature
-    # 同样可以添加登录验证
-    try:
-        new_temp = float(request.json.get('temp', 1.0))
-        if 0 <= new_temp <= 2:
-            temperature = new_temp
-            logging.info(f"温度已设置为: {temperature}")
-            return jsonify({'success': True})
-        logging.warning(f"尝试设置无效温度值: {new_temp}")
-        return jsonify({'success': False, 'error': '温度值必须在 0 和 2 之间'}), 400
-    except (ValueError, TypeError):
-        logging.error(f"设置温度时收到无效值: {request.json.get('temp')}")
-        return jsonify({'success': False, 'error': '无效的温度值'}), 400
-
 
 @app.route('/api/new_chat',methods=['POST'])
 def new_chat():
-    # 此操作也应验证用户登录（前端已做）
-    # data = request.json
-    # username = data.get('username') # 如果需要记录
-    # if not username: return jsonify({'success': False, 'error': '需要登录'}), 401
-
+  
     global current_session
     old_session = current_session
     current_session = str(uuid.uuid4()) # 生成新的全局 session_id
@@ -348,43 +281,33 @@ def new_chat():
 
 # 回答函数 (不变)
 def ai_call(text):
-    client = OpenAI(base_url=BASE_URL, api_key="sk-123456")
+    client = OpenAI(base_url=BASE_URL, api_key= apikey)
     response = client.chat.completions.create(
-        model=MODEL_MAPPING[current_api],
-        messages=[{"role": "user", "content": text}],
-        temperature=temperature
+        model=current_model,
+        messages=[
+            {"role": "system", "content": "你是一个工程师"},
+            {"role": "user", "content": text}
+            ],
     )
     return response.choices[0].message.content
 
 
-## 保存历史文件 (**修改：** 添加 username 参数和列)
-def save_chat(username, user_msg, ai_msg):
+## 保存历史文件 ( 添加 user_id 参数和列)
+def save_chat(user_id, user_msg, ai_msg): # 修改：username -> user_id
     global current_session # 需要访问全局会话ID
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # 使用 datetime 获取更精确的时间
-    # try:
-    #     # 确保文件存在且有表头，如果需要的话（initialize_files 应该已处理）
-    #     if not os.path.exists(HISTORY_PATH):
-    #          initialize_files()
 
-    #     with open(HISTORY_PATH, "a", newline="", encoding="utf-8") as f:
-    #         writer = csv.writer(f)
-    #         writer.writerow([current_session, username, user_msg, ai_msg, timestamp])
-    #     # logging.info(f"聊天记录已保存 (用户: {username}, 会话: {current_session})")
-    # except IOError as e:
-    #     logging.error(f"保存聊天记录时出错 (用户: {username}, 会话: {current_session}): {e}")
-    # except Exception as e:
-    #      logging.error(f"保存聊天时发生未知错误: {e}")
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO chat_messages (session_id, username, user_msg, ai_msg, timestamp)
+                INSERT INTO chat_messages (session_id, user_id, user_msg, ai_msg, timestamp)
                 VALUES (?, ?, ?, ?, ?)
-            """, (current_session, username, user_msg, ai_msg, timestamp))
+            """, (current_session, user_id, user_msg, ai_msg, timestamp)) # 修改：使用 user_id
             conn.commit()
-        # logging.info(f"聊天记录已保存 (用户: {username}, 会话: {current_session})")
+        # logging.info(f"聊天记录已保存 (用户 ID: {user_id}, 会话: {current_session})")
     except sqlite3.Error as e:
-        logging.error(f"保存聊天记录到数据库时出错 (用户: {username}, 会话: {current_session}): {e}")
+        logging.error(f"保存聊天记录到数据库时出错 (用户 ID: {user_id}, 会话: {current_session}): {e}")
     except Exception as e: # 捕获其他可能的未知错误
         logging.error(f"保存聊天时发生未知错误: {e}")
 
@@ -397,44 +320,48 @@ def get_sessions():
         logging.warning("获取会话列表请求缺少用户名")
         return jsonify({"error": "需要提供用户名"}), 400
 
-    logging.info(f"用户 {username} 请求会话列表")
+    user_data = find_user(username) # 获取用户数据
+    if not user_data:
+        logging.warning(f"用户 {username} 请求会话列表，但用户不存在")
+        return jsonify({"error": "用户不存在"}), 404 # 404 Not Found 似乎更合适
+    
+    user_id = user_data['id'] # 提取 user_id
+
+    logging.info(f"用户 {username} (ID: {user_id}) 请求会话列表")
     sessions = {}
     # if os.path.exists(HISTORY_PATH): # <-- 移除对 HISTORY_PATH 的检查
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             # 查询每个会话的最新一条用户消息作为预览，并按最新时间排序
-            # 注意：这里的预览逻辑直接取 user_msg，如果一个会话的最后一条消息是 AI 的，
-            # 那么预览可能不是用户最后说的。更复杂的预览可能需要更复杂的SQL。
-            # 或者，我们可以简单地取该会话中最新的 user_msg。
-            #  (SELECT user_msg FROM chat_messages cm_inner
-            #   WHERE cm_inner.session_id = cm_outer.session_id AND cm_inner.username = cm_outer.username AND cm_inner.user_msg IS NOT NULL
-            #   ORDER BY cm_inner.timestamp DESC LIMIT 1) as preview
-            #  上面的预览如果找不到user_msg会是NULL, 需要处理
+            # 这里运用到了内外表，我们的session_id是外表，chat_messages（cm_outer）是内表
+            # 我们所做的就是在外表查询的基础上，进行内表的查询
+            # 由于内表的查询是基于chat的uuser_msg的，所以要进行新一轮的筛选
             cursor.execute("""
                 SELECT
                     session_id,
                     MAX(timestamp) as last_time,
                     (SELECT COALESCE(user_msg, '') FROM chat_messages cm_inner
                      WHERE cm_inner.session_id = cm_outer.session_id
-                       AND cm_inner.username = cm_outer.username
+                       AND cm_inner.user_id = cm_outer.user_id 
                        AND cm_inner.user_msg IS NOT NULL AND LENGTH(cm_inner.user_msg) > 0
                      ORDER BY cm_inner.timestamp DESC LIMIT 1) as preview_user_msg,
+                    
                     (SELECT COALESCE(ai_msg, '') FROM chat_messages cm_inner
                      WHERE cm_inner.session_id = cm_outer.session_id
-                       AND cm_inner.username = cm_outer.username
+                       AND cm_inner.user_id = cm_outer.user_id 
                        AND cm_inner.ai_msg IS NOT NULL AND LENGTH(cm_inner.ai_msg) > 0
                      ORDER BY cm_inner.timestamp DESC LIMIT 1) as preview_ai_msg
-                FROM chat_messages cm_outer
-                WHERE username = ?
-                GROUP BY session_id
+                FROM chat_messages cm_outer --cm_outer是chat_messages表的别名
+                WHERE user_id = ?
+                GROUP BY session_id -- 按session_id分组
                 ORDER BY last_time DESC
-            """, (username,))
+            """, (user_id,)) 
             session_rows = cursor.fetchall()
 
         if not session_rows:
-            logging.info(f"用户 {username} 没有会话记录")
-            return jsonify([]) # 没有会话，返回空列表
+            logging.info(f"用户 {username} (ID: {user_id}) 没有会话记录")
+            return jsonify([])
 
         for row in session_rows:
             session_id = row["session_id"]
@@ -459,63 +386,7 @@ def get_sessions():
     except Exception as e: # 捕获其他可能的未知错误
             logging.error(f"处理历史记录时发生未知错误 (用户 {username}): {e}")
             return jsonify({"error": f"处理历史记录时出错: {e}"}), 500
-            # with open(HISTORY_PATH, "r", encoding="utf-8") as f: # <-- 移除文件读取
-            #     reader = csv.reader(f)
-            #     try:
-            #         header = next(reader) # 读取表头
-            #         # 验证表头是否符合预期
-            #         if header != ["session_id", "username", "user_msg", "ai_msg", "timestamp"]:
-            #              logging.error(f"历史文件表头不匹配: {header}")
-            #              return jsonify({"error": "历史文件格式错误"}), 500
-            #     except StopIteration:
-            #         logging.info("历史文件为空")
-            #         return jsonify([]) # 空文件，返回空列表
 
-            #     for row in reader:
-            #         # **修改：** 检查列数和用户名匹配
-            #         if len(row) == 5 and row[1] == username:
-            #             session_id = row[0]
-            #             user_msg = row[2] # 用户消息用于预览
-            #             timestamp_str = row[4]
-
-            #             current_session_data = sessions.get(session_id, {"last_time": "1970-01-01 00:00:00"})
-
-            #             try:
-            #                 # 比较时间戳，保留最新的
-            #                 row_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-            #                 current_time = datetime.strptime(current_session_data["last_time"], "%Y-%m-%d %H:%M:%S")
-            #                 if row_time >= current_time:
-            #                     sessions[session_id] = {
-            #                         "last_time": timestamp_str,
-            #                         "preview": user_msg[:30] + "..." if len(user_msg) > 30 else user_msg
-            #                     }
-            #             except ValueError:
-            #                  logging.warning(f"会话 {session_id} (用户 {username}) 的时间戳格式无效: {timestamp_str}")
-            #                  continue
-            #         elif len(row) != 5:
-            #             logging.warning(f"跳过格式不正确的行 (用户 {username}): {row}")
-
-        # except IOError as e:
-        #     logging.error(f"读取历史记录时出错 (用户 {username}): {e}")
-        #     return jsonify({"error": f"读取历史记录时出错: {e}"}), 500
-        # except Exception as e:
-        #      logging.error(f"处理历史记录时发生未知错误 (用户 {username}): {e}")
-        #      return jsonify({"error": f"处理历史记录时出错: {e}"}), 500
-
-
-    # session_items = list(sessions.items()) # <-- sessions 字典现在直接由数据库查询结果构建
-    # 按最后时间排序 (数据库查询已排序)
-    # try:
-    #     session_items.sort(key=lambda item: datetime.strptime(item[1]['last_time'], "%Y-%m-%d %H:%M:%S"), reverse=True)
-    # except ValueError as e:
-    #     logging.error(f"排序会话时时间格式转换失败 (用户 {username}): {e}. 返回未排序列表。")
-
-    # logging.info(f"为用户 {username} 返回 {len(session_items)} 个会话")
-    # return jsonify(session_items)
-    
-    # 将字典转换为前端期望的列表格式
-    # sessions 的键是 session_id，值是包含 last_time 和 preview 的字典
-    # 前端期望的是一个元组列表：[(session_id, { "last_time": ..., "preview": ...}), ...]
     session_list_for_frontend = list(sessions.items())
     logging.info(f"为用户 {username} 返回 {len(session_list_for_frontend)} 个会话")
     return jsonify(session_list_for_frontend)
@@ -526,13 +397,20 @@ def get_sessions():
 def load_session_content():
     global current_session # 声明我们要修改全局变量
     session_id = request.args.get('session')
-    username = request.args.get('user') # **新增：** 获取用户名
+    username = request.args.get('user') #  获取用户名
 
     if not session_id or not username:
         logging.warning("加载会话请求缺少 session_id 或 username")
         return jsonify({"success": False, "error": "缺少 session ID 或用户名"}), 400
 
-    logging.info(f"用户 {username} 请求加载会话: {session_id}")
+    user_data = find_user(username) # 获取用户数据
+    if not user_data:
+        logging.warning(f"用户 {username} 请求加载会话，但用户不存在")
+        return jsonify({"success": False, "error": "用户不存在或无法加载会话"}), 404
+
+    user_id = user_data['id'] # 提取 user_id
+
+    logging.info(f"用户 {username} (ID: {user_id}) 请求加载会话: {session_id}")
 
     messages = []
     session_found_for_user = False
@@ -542,9 +420,9 @@ def load_session_content():
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT user_msg, ai_msg FROM chat_messages
-                WHERE session_id = ? AND username = ?
+                WHERE session_id = ? AND user_id = ? 
                 ORDER BY timestamp ASC
-            """, (session_id, username))
+            """, (session_id, user_id)) # 修改：传递 user_id
             chat_rows = cursor.fetchall()
 
         if chat_rows:
@@ -577,47 +455,7 @@ def load_session_content():
     except Exception as e: # 捕获其他可能的未知错误
             logging.error(f"加载会话 {session_id} (用户 {username}) 时发生未知错误: {e}")
             return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
-            # with open(HISTORY_PATH, "r", encoding="utf-8") as f: # <-- 移除文件读取
-            #     reader = csv.reader(f)
-            #     try:
-            #         next(reader) # 跳过表头
-            #     except StopIteration:
-            #         pass # 文件为空
-
-            #     for row in reader:
-            #         # **修改：** 检查列数、session_id 和 username 匹配
-            #         if len(row) == 5 and row[0] == session_id:
-            #              if row[1] == username:
-            #                  session_found_for_user = True
-            #                  messages.append({"sender": "user", "text": row[2]})
-            #                  messages.append({"sender": "ai", "text": row[3]})
-            #              else:
-            #                  # 找到了 session 但不属于此用户，记录但不添加到 messages
-            #                   logging.warning(f"用户 {username} 尝试加载不属于自己的会话 {session_id} (属于 {row[1]})")
-            #                   # 可以选择立即返回错误，或继续检查完文件后判断
-
-            # if not session_found_for_user:
-            #      logging.warning(f"用户 {username} 尝试加载的会话 {session_id} 不存在或不属于该用户")
-            #      # 如果 session 存在但不属于该用户，或者根本找不到该 session，都返回错误
-            #      return jsonify({"success": False, "error": "无法加载该会话或会话不存在"}), 404 # 404 Not Found
-
-
-            # # 如果找到了属于该用户的会话记录
-            # current_session = session_id # 切换后端的当前会话 ID
-            # logging.info(f"用户 {username} 成功加载会话 {session_id}，后端会话已切换")
-            # return jsonify({"success": True, "messages": messages})
-
-        # except IOError as e:
-        #     logging.error(f"加载会话 {session_id} (用户 {username}) 时读取文件出错: {e}")
-        #     return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
-        # except Exception as e:
-        #      logging.error(f"加载会话 {session_id} (用户 {username}) 时发生未知错误: {e}")
-        #      return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
-    # else: # <-- 移除对 HISTORY_PATH 的检查
-    #     # 历史文件不存在
-    #     logging.warning(f"历史文件 {HISTORY_PATH} 不存在，无法加载会话 {session_id}")
-    #     return jsonify({"success": False, "error": "历史记录文件不存在"}), 404
-
+ 
 
 ## 设置
 @app.route('/api/setting')
