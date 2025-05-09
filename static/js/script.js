@@ -12,7 +12,8 @@ const settingPopup = document.getElementById('settingPopup'); // 获取设置
 const settingOptions = document.getElementById('settingOptions'); // 新增：获取设置选项容器
 const settingContentDisplay = document.getElementById('settingContentDisplay'); // 获取内容显示区域
 const backToSettingsButton = document.getElementById('backToSettingsButton'); // 获取返回按钮
-
+const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上传器
+const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上传按钮
 // --- 新增：全局变量存储当前会话的用户名 ---
 let currentUsername = null;
 
@@ -480,7 +481,14 @@ function loadHistory() {
 document.addEventListener('DOMContentLoaded', () => {
     console.log("DOM 已加载，检查登录状态...");
     checkLoginStatus(); // 检查登录状态 (这个函数现在会调用 /api/check_auth)
+
+
+// 添加CSV上传功能
+if (csvUploaderInput) {
+    csvUploaderInput.addEventListener('change', handleCsvFileSelect);
+}
 });
+
 
 // 加载特定会话内容 (修改为需要用户名) - 
 async function loadSession(sessionId, username) { // 参数 username 仍然需要
@@ -519,5 +527,81 @@ async function loadSession(sessionId, username) { // 参数 username 仍然需�
     } catch (error) {
         showError('加载会话时发生网络错误: ' + error);
         console.error("加载会话错误:", error);
+    }
+}
+
+function triggerCsvUpload() {
+    if (!currentUsername) {
+        showError("请先登录才能上传文件！");
+        return;
+    }
+    // 模拟点击隐藏的文件输入框
+    if (csvUploaderInput) {
+        csvUploaderInput.click();
+    }
+}
+
+// --- 新增：处理文件选择和上传的函数 ---
+async function handleCsvFileSelect(event) {
+    if (!currentUsername) {
+        showError("用户未登录，无法上传文件。"); // 再次检查以防万一
+        return;
+    }
+
+    const file = event.target.files[0]; // 获取用户选择的第一个文件
+    if (!file) {
+        return; // 用户可能取消了选择
+    }
+
+    // 简单的客户端文件类型检查 (主要为了改善用户体验，服务器端验证是必须的)
+    // 浏览器对MIME类型的报告可能不完全一致，所以主要依赖扩展名，并对MIME类型做宽松检查
+    const fileName = file.name.toLowerCase();
+    const allowedExtensions = ['.csv'];
+    // 有些浏览器对CSV的MIME类型可能是 'application/vnd.ms-excel' 或空字符串
+    const allowedMimeTypes = ['text/csv', 'application/vnd.ms-excel', ''];
+
+
+    if (!allowedExtensions.some(ext => fileName.endsWith(ext)) || !allowedMimeTypes.includes(file.type)) {
+        showError('请选择一个有效的 CSV 文件 (.csv)。');
+        event.target.value = null; // 清空文件选择，以便用户可以重新选择相同的文件
+        return;
+    }
+
+    // 创建 FormData 对象来包装文件数据
+    const formData = new FormData();
+    formData.append('file', file); // 'file' 必须与后端 request.files['file'] 的键名一致
+    formData.append('username', currentUsername); // 将当前用户名也发送过去
+
+    // 禁用上传按钮，防止重复提交
+    if (uploadCsvButton) {
+        uploadCsvButton.textContent = '上传中...';
+        uploadCsvButton.disabled = true;
+    }
+
+    try {
+        const response = await fetch('/api/upload_file', {
+            method: 'POST',
+            body: formData, // 发送 FormData 时，浏览器会自动设置正确的 Content-Type (multipart/form-data)
+            // 不需要手动设置 headers: {'Content-Type': 'multipart/form-data'}
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            alert(data.message || '文件上传成功！');
+            // 可选：上传成功后可以执行其他操作，例如刷新文件列表（如果未来有的话）
+        } else {
+            showError(data.error || '文件上传失败。');
+        }
+    } catch (error) {
+        console.error("CSV Upload error:", error);
+        showError('上传文件时发生网络错误。');
+    } finally {
+        // 无论成功与否，恢复上传按钮状态并清空文件选择
+        if (uploadCsvButton) {
+            uploadCsvButton.textContent = '上传';
+            uploadCsvButton.disabled = false;
+        }
+        event.target.value = null; // 清空<input type="file">的值，允许用户再次选择同一个文件
     }
 }

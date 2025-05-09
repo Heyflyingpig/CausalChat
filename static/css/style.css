@@ -167,7 +167,20 @@
     .input-area button:hover {
         background-color: #0056b3; /* 这是一个伪类选择器。它选中当鼠标悬停在按钮上时的状态。*/
     }
-
+    
+    /* 上传按钮样式 */
+    #uploadCsvButton {
+        background-color: #28bb4b; 
+        margin-right: 2px;
+        margin-left: 2px; /* 与发送按钮之间留一些间距 */
+    }
+    #uploadCsvButton:hover {
+        background-color: #218838;
+    }
+    #uploadCsvButton:disabled { /* 上传过程中禁用时的样式 */
+        background-color: #6c757d;
+        cursor: not-allowed;
+    }
     .message {
         max-width: 80%;
         padding: 10px 15px;

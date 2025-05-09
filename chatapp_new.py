@@ -104,6 +104,19 @@ def initialize_database():
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_session_userid_time ON chat_messages (session_id, user_id, timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_userid_session_time ON chat_messages (user_id, session_id, timestamp DESC)")
 
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS uploaded_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    file_content BLOB NOT NULL,
+                    upload_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files (user_id)")
             conn.commit()# 提交事务，保存
         
         logging.info(f"数据库已初始化: {DATABASE_PATH}")
@@ -476,6 +489,66 @@ def setting():
             return jsonify({"success": False, "error": f"请求的内容文件 '{filename}' 未找到"}), 404 # 返回 404 Not Found
 
     return jsonify({"success": True, "messages": content})
+
+@app.route('/api/upload_file', methods=['POST'])
+def upload_file():
+    username = request.form.get('username')
+    if not username:
+        logging.warning("CSV上传请求缺少用户名")
+        return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
+
+    user_data = find_user(username)
+    if not user_data:
+        logging.warning(f"用户 {username} 尝试上传CSV，但用户不存在")
+        return jsonify({'success': False, 'error': '用户认证失败'}), 401
+    user_id = user_data['id']
+    
+    if 'file' not in request.files:
+        logging.warning(f"用户 {username} 上传CSV请求中没有文件部分")
+        return jsonify({'success': False, 'error': '没有文件被上传'}), 400
+    
+    file = request.files['file'] # 获取上传的文件对象
+
+    # 3. 检查文件名是否为空
+    if file.filename == '':
+        logging.warning(f"用户 {username} 上传了但未选择文件")
+        return jsonify({'success': False, 'error': '没有选择文件'}), 400
+    
+    allowed_extensions = {'.csv'}
+    allowed_mimetypes = {'text/csv', 'application/vnd.ms-excel'} # 有些浏览器对csv的mimetype可能是后者
+
+    # 4. 检查文件扩展名和MIME类型
+    original_filename = file.filename
+    file_ext = os.path.splitext(original_filename)[1].lower() # 获取文件扩展名并转为小写
+
+    if not (file_ext in allowed_extensions and file.mimetype in allowed_mimetypes):
+        logging.warning(f"用户 {username} 尝试上传非法文件类型: {original_filename} (MIME: {file.mimetype})")
+        return jsonify({'success': False, 'error': '只允许上传 CSV 文件。请检查文件格式和扩展名。'}), 400
+
+    # 5. 读取文件内容
+    try:
+        file_content = file.read() # 将整个文件内容读取为 bytes
+    except Exception as e:
+        logging.error(f"用户 {username} 上传文件 {original_filename} 时读取内容失败: {e}")
+        return jsonify({'success': False, 'error': '读取文件内容失败'}), 500
+    
+    # 6. 保存到数据库
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO uploaded_files (user_id, filename, mime_type, file_content)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, original_filename, file.mimetype, file_content))
+            conn.commit()
+        logging.info(f"用户 {username} (ID: {user_id}) 成功上传文件: {original_filename} (MIME: {file.mimetype})")
+        return jsonify({'success': True, 'message': f'文件 "{original_filename}" 上传成功！'})
+    except sqlite3.Error as e:
+        logging.error(f"用户 {username} 保存文件 {original_filename} 到数据库时出错: {e}")
+        return jsonify({'success': False, 'error': '保存文件到数据库失败'}), 500
+    except Exception as e: # 捕获其他可能的未知错误
+        logging.error(f"用户 {username} 上传文件 {original_filename} 时发生未知服务器错误: {e}")
+        return jsonify({'success': False, 'error': '上传文件时发生服务器内部错误'}), 500
 
 # 根路由 (不变)
 @app.route('/')

@@ -124,6 +124,8 @@
         
         <div class="input-area">
             <textarea id="messageInput" placeholder="输入消息..." rows = "3"></textarea>
+            <input type="file" id="csvUploader" accept=".csv" style="display: none;">
+            <button id="uploadCsvButton" onclick="triggerCsvUpload()" title="上传">上传</button>
             <button onclick="sendMessage()">发送</button>
         </div>
     </div>
