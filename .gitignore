@@ -172,3 +172,16 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Sensitive configuration files
+secrets.json
+config.json
+
+# MCP demo
+MCPdemo/
+
+# 项目规划
+项目规划/
+
+# test
+test.py
