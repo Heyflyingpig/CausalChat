@@ -1,6 +1,57 @@
 # Causal-chat
 *只需上传你的数据集，Causal-chat 可以自动帮你挑选并得到因果分析算法，几分钟内生成可交互的对话面板 + 专业报告*
 
+## 依赖安装
+本项目使用 Python，所有依赖项都已在 `requirements.txt` 文件中列出。请使用以下命令安装：
+```bash
+pip install -r requirements.txt
+```
+*注意: `gunicorn` 仅适用于 Linux/macOS。*
+
+## 开发流程 (Windows/macOS/Linux)
+
+这是一个前后端分离的项目，后端由 Flask 提供服务，前端由 `pywebview` 构建为一个独立的桌面应用窗口。
+
+### 1. 启动后端服务
+在项目根目录 (`causalchat/`) 下打开一个终端，运行以下命令：
+```bash
+python Causalchat.py
+```
+你会看到 Flask 开发服务器启动的日志，它正在 `http://127.0.0.1:5000` 上监听。**请保持此终端窗口运行。**
+
+### 2. 启动前端应用
+再打开一个 **新的终端窗口**，同样在项目根目录下，运行以下命令：
+```bash
+python run_webview.py
+```
+稍等片刻，一个标题为 "FLYINGPIG-AI" 的桌面应用窗口将会出现，并加载应用的登录界面。
+
+## 生产部署流程
+
+在生产环境中，后端将部署在云服务器上，而前端应用 (`run_webview.py`) 在本地电脑上运行并连接到服务器。
+
+### 1. 服务器端 (Linux)
+- 将项目代码同步到你的云服务器。
+- 在服务器的 `causalchat/` 目录下，使用 `gunicorn` 启动后端服务：
+  ```bash
+  gunicorn Causalchat:app -w 4 -b 0.0.0.0:5000
+  ```
+- 确保服务器的防火墙或安全组已开放 `5000` 端口。
+
+### 2. 客户端 (你的本地电脑)
+- 在你的本地电脑上，用代码编辑器打开 `causalchat/run_webview.py` 文件。
+- 修改文件顶部的 `URL` 变量，将其指向你的云服务器的公网 IP 地址。
+  ```python
+  # 例如:
+  URL = 'http://120.46.198.198:5000' 
+  ```
+- 保存文件后，在本地终端中运行前端应用：
+  ```bash
+  python run_webview.py
+  ```
+- 桌面应用窗口将会启动，并直接连接到你在云服务器上的后端服务。
+
+
 ## 更新日志：
 
 
