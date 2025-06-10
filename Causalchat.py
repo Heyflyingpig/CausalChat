@@ -547,9 +547,9 @@ def get_sessions():
                        AND cm_inner.user_id = cm_outer.user_id 
                        AND cm_inner.ai_msg IS NOT NULL AND LENGTH(cm_inner.ai_msg) > 0
                      ORDER BY cm_inner.timestamp DESC LIMIT 1) as preview_ai_msg
-                FROM chat_messages cm_outer --cm_outer是chat_messages表的别名
+                FROM chat_messages cm_outer
                 WHERE user_id = %s
-                GROUP BY session_id -- 按session_id分组
+                GROUP BY session_id
                 ORDER BY last_time DESC
             """, (user_id,)) 
             session_rows = cursor.fetchall()
@@ -751,5 +751,9 @@ def index():
 
 # 主程序入口 (修改 webview.start)
 if __name__ == '__main__':
-    pass
+    # 这部分代码仅在直接运行此脚本时执行，非常适合本地开发和调试。
+    # 它会启动一个 Flask 内置的开发服务器。
+    # debug=True 模式会在代码更改后自动重启服务器，非常方便。
+    # Gunicorn 或 Waitress 在生产环境会忽略这个 block。
+    app.run(host='127.0.0.1', port=5000, debug=True)
     
