@@ -9,6 +9,14 @@ import uuid
 from datetime import datetime
 import logging
 import json 
+import asyncio
+import atexit
+import subprocess
+import sys
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from contextlib import AsyncExitStack
+import threading
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -432,6 +440,19 @@ def check_auth():
 
 
 
+# --- 新增: 后台异步事件循环 ---
+def start_event_loop(loop: asyncio.AbstractEventLoop):
+    """在一个线程中启动并永远运行事件循环"""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+# 创建一个全局的事件循环和后台线程
+background_loop = asyncio.new_event_loop()
+loop_thread = threading.Thread(target=start_event_loop, args=(background_loop,), daemon=True)
+loop_thread.start()
+logging.info("后台 asyncio 事件循环线程已启动。")
+# --- 结束新增 ---
+
 # 利用flask的jsonify的框架，将后端处理转发到前端
 @app.route('/api/send', methods=['POST'])
 def handle_message():
@@ -453,12 +474,14 @@ def handle_message():
     logging.info(f"用户 {username} (ID: {user_id}) 发送消息: {user_input[:50]}...") # 日志记录
 
     try:
-        response = ai_call(user_input)
-        #传递 user_id 给 save_chat
+        # 修正: 将异步任务提交到后台循环，并等待结果
+        future = asyncio.run_coroutine_threadsafe(ai_call(user_input), background_loop)
+        response = future.result()  # 这会阻塞当前线程直到异步任务完成
+
         save_chat(user_id, user_input, response)
         return jsonify({'success': True, 'response': response})
     except Exception as e:
-        logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}")
+        logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}", exc_info=True)
         return jsonify({'success': False, 'error': f'处理消息时出错: {e}'}), 500
 
 @app.route('/api/new_chat',methods=['POST'])
@@ -472,17 +495,115 @@ def new_chat():
     # 但对于单用户本地运行或前端驱动会话切换的场景是可行的
     return jsonify({'success': True})
 
-# 回答函数 (不变)
-def ai_call(text):
-    client = OpenAI(base_url=BASE_URL, api_key= apikey)
-    response = client.chat.completions.create(
-        model=current_model,
-        messages=[
-            {"role": "system", "content": "你是一个工程师"},
+# --- 核心修改：改造 ai_call 函数为一个独立的、无状态的函数 ---
+async def ai_call(text):
+    """
+    与 LLM 交互，并根据需要通过 MCP 调用工具。
+    这是一个异步函数，每次调用都会建立和断开与MCP服务器的连接。
+    
+     async 关键字告诉Python，这个函数内部可能会包含一些需要“等待”的操作（比如网络请求、文件读写），
+    在等待期间，程序可以先去干点别的事，而不是傻等。
+    这使得它非常适合处理I/O密集型任务。
+    函数内部必须使用 await 关键字来执行这些“等待”操作。
+    """
+    # 获取CausalChat.py所在的目录
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # 构建到mcp_server.py的相对路径
+    mcp_server_path = os.path.join(current_dir, "CausalChatMCP", "mcp_server.py")
+    
+    # 使用一个临时的退出堆栈来管理本次调用的资源
+    #异步上下文管理器，所有进程都会装载到这个AsyncExitStack()中，方便我们后期清理
+    async with AsyncExitStack() as exit_stack:
+        mcp_tools = []
+        session = None
+        try:
+            logging.info("ai_call: 准备连接到 MCP 服务器...")
+            # 启动mcp_server.py子进程，用于将解释器的绝对路劲配置到该py文件中
+            server_params = StdioServerParameters(
+                command=sys.executable, #代表了当前正在运行的Python解释器的绝对路径
+                args=[mcp_server_path] # 启动mcp_server.py子进程，用于将解释器的绝对路劲配置到该py文件中
+            )
+            # stdio_client(server_params) 启动 mcp_server.py 子进程，
+            # 并建立起两者之间的 stdin/stdout 通信管道。
+            # stdio_client成功后返回一个元组，包含了两个关键部分：一个用于从子进程读取数据流，一个用于向子进程写入数据流。我们通过元组解包的方式将它们分别赋给两个变量。
+            read_stream, write_stream = await exit_stack.enter_async_context(stdio_client(server_params))
+            # 创建一个ClientSession对象，用于与MCP服务器进行交互。
+            # 这个对象会处理与MCP服务器的通信细节，比如发送请求、接收响应等。
+            # 它内部会使用read_stream和write_stream来与MCP服务器进行数据交换。
+            session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
+            # 初始化MCP会话，确保MCP服务器已经准备好处理请求。
+            await session.initialize()
+
+            logging.info("ai_call: 成功连接 MCP 服务器，正在获取工具列表...")
+             # mcp_server.py会返回一个列表，包含他所有被 @mcp.tool() 装饰的函数。
+            tools_response = await session.list_tools()
+            # 列表推导式子，将所有mcp语法转化为llm语法
+            mcp_tools = [{
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.inputSchema,
+                }
+            } for tool in tools_response.tools]
+            logging.info(f"ai_call: 发现工具: {[tool['function']['name'] for tool in mcp_tools]}")
+
+        except Exception as e:
+            logging.error(f"连接或设置 MCP 服务器失败: {e}. 将作为普通聊天继续。")
+            # 如果 MCP 失败，mcp_tools 列表将为空，模型将不会尝试使用工具。
+
+        client = OpenAI(base_url=BASE_URL, api_key=apikey)
+        messages = [
+            {"role": "system", "content": "你是一个有用的工程师助手，可以使用工具来获取额外信息。"},
             {"role": "user", "content": text}
-            ],
-    )
-    return response.choices[0].message.content
+        ]
+
+        # 第一次调用
+        logging.info("ai_call: 首次调用 LLM...")
+        response = client.chat.completions.create(
+            model=current_model,
+            messages=messages,
+            tools=mcp_tools or None, # 如果列表为空，则不传递 tools 参数
+            tool_choice="auto", # 自动选择是否使用工具
+        )
+
+        response_message = response.choices[0].message
+        tool_calls = response_message.tool_calls
+        # 如果工具列表不为空，则调用工具
+
+        if tool_calls and session:
+            logging.info(f"LLM 决定调用工具: {[(call.function.name) for call in tool_calls]}")
+            messages.append(response_message)
+
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+                
+                #客户端通过会话，将工具名和解析好的参数字典发送给mcp_server.py子进程
+                function_response_obj = await session.call_tool(function_name, function_args)
+                function_response_text = function_response_obj.content[0].text
+                # 返回所有内容，包括工具名和解析好的参数字典，这里的参数MCP定义的
+                
+                messages.append({
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": function_name,
+                    "content": function_response_text,
+                })
+                # 这里返回的是tool角色
+            
+            # 第二次调用
+            logging.info("ai_call: 携带工具结果，再次调用 LLM...")
+            second_response = client.chat.completions.create(
+                model=current_model,
+                messages=messages,
+            )
+            return second_response.choices[0].message.content
+        else:
+            logging.info("ai_call: LLM 未调用工具，直接返回。")
+            return response_message.content
+
+
 
 
 ## 保存历史文件 ( 添加 user_id 参数和列)
@@ -749,11 +870,7 @@ def index():
     # 总是返回 chat.html，由前端 JS 决定显示登录还是主界面
     return send_from_directory('static', 'chat.html')
 
-# 主程序入口 (修改 webview.start)
+# 主程序入口
 if __name__ == '__main__':
-    # 这部分代码仅在直接运行此脚本时执行，非常适合本地开发和调试。
-    # 它会启动一个 Flask 内置的开发服务器。
-    # debug=True 模式会在代码更改后自动重启服务器，非常方便。
-    # Gunicorn 或 Waitress 在生产环境会忽略这个 block。
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    app.run(host='127.0.0.1', port=5001, debug=True)
     
