@@ -320,7 +320,7 @@ async function sendMessage() {
         const response = await fetch('/api/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: message, username: currentUsername })
+            body: JSON.stringify({ message: message })
         });
         
         // Remove the loading message before adding the actual response
@@ -391,61 +391,59 @@ function toggleSidebar() {
 }
 
 // 加载历史记录
-function loadHistory() {
-     const loggedInUser = currentUsername;
-     if (!loggedInUser) {
-         console.log("用户未登录，不加载历史记录。");
-         historyList.innerHTML = '<p style="padding: 10px; color: #888;">请先登录以查看历史记录。</p>';
-         return;
-     }
+async function loadHistory() {
+    if (!currentUsername) {
+        historyList.innerHTML = '<p class="history-empty-message">请先登录以查看历史记录。</p>';
+        return;
+    }
+    console.log(`为用户 ${currentUsername} 加载历史会话...`);
 
-    console.log(`为用户 ${loggedInUser} 加载历史记录...`);
-    fetch(`/api/sessions?user=${encodeURIComponent(loggedInUser)}`)
-        .then(response => response.json())
-        .then(data => {
-            historyList.innerHTML = '';
-
-            if (data.error) {
-                 console.error("加载历史记录失败:", data.error);
-                 historyList.innerHTML = `<p style="padding: 10px; color: red;">加载历史记录失败: ${data.error}</p>`;
+    try {
+        const response = await fetch(`/api/sessions`);
+        if (!response.ok) {
+            if (response.status === 401) {
+                // 如果是401未授权，可能是会话过期，可以提示用户重新登录
+                 historyList.innerHTML = '<p class="history-empty-message">会话已过期，请重新登录。</p>';
+                 handleLogout(); // 可以选择直接触发登出流程
                  return;
             }
-            if (!Array.isArray(data)) {
-                console.error("加载历史记录失败: 响应格式不正确");
-                historyList.innerHTML = `<p style="padding: 10px; color: red;">加载历史记录失败: 格式错误</p>`;
-                return;
-            }
-             if (data.length === 0) {
-                 console.log(`用户 ${loggedInUser} 没有历史会话记录。`);
-                 historyList.innerHTML = '<p style="padding: 10px; color: #888;">没有历史会话记录。</p>';
-                 return;
-             }
+            throw new Error(`服务器错误: ${response.status}`);
+        }
+        const sessions = await response.json();
+        
+        historyList.innerHTML = ''; // 清空旧列表
 
-            console.log(`收到 ${data.length} 条历史记录项`);
-            data.forEach(([sessionId, sessionData]) => {
-                const item = document.createElement('div');
-                item.className = 'history-item';
-                let formattedTime = "时间未知";
-                try {
-                    formattedTime = new Date(sessionData.last_time).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' });
-                } catch (e) {
-                    console.warn(`无法解析会话 ${sessionId} 的时间: ${sessionData?.last_time}`);
-                }
-                 const previewText = sessionData?.preview || "无预览";
-
-                item.innerHTML = `
-                    <div class="session-info">
-                        <div class="session-time">${formattedTime}</div>
-                    </div>
-                    <div class="preview-text">${previewText}</div>
-                `;
-                item.onclick = () => loadSession(sessionId, loggedInUser);
-                historyList.appendChild(item);
+        if (Object.keys(sessions).length === 0) {
+            historyList.innerHTML = '<p class="history-empty-message">还没有任何对话记录。</p>';
+        } else {
+            sessions.forEach(session => {
+                const session_id = session[0];
+                const info = session[1];
+                const historyItem = document.createElement('div');
+                historyItem.className = 'history-item';
+                historyItem.onclick = () => loadSession(session_id);
+                
+                const sessionInfo = document.createElement('div');
+                sessionInfo.className = 'session-info';
+                
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'session-time';
+                timeDiv.textContent = info.last_time;
+                
+                const previewDiv = document.createElement('div');
+                previewDiv.className = 'preview-text';
+                previewDiv.textContent = info.preview;
+                
+                sessionInfo.appendChild(timeDiv);
+                historyItem.appendChild(sessionInfo);
+                historyItem.appendChild(previewDiv);
+                historyList.appendChild(historyItem);
             });
-        }).catch(error => {
-             console.error("加载历史记录时发生网络错误:", error);
-             historyList.innerHTML = `<p style="padding: 10px; color: red;">加载历史记录时出错: ${error}</p>`;
-        });
+        }
+    } catch (error) {
+        console.error("加载历史记录失败:", error);
+        historyList.innerHTML = `<p class="history-empty-message">加载历史记录失败: ${error.message}</p>`;
+    }
 }
 
 // 页面加载完成时
@@ -460,38 +458,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 // 加载特定会话内容
-async function loadSession(sessionId, username) {
-     if (!username || username !== currentUsername) {
-         showError("无法加载会话：用户状态异常或权限不足。");
-         console.warn(`尝试加载会话 ${sessionId} 但参数用户 ${username} 与当前登录用户 ${currentUsername} 不匹配。`);
-         return;
-     }
-    console.log(`用户 ${username} 尝试加载会话: ${sessionId}`);
+async function loadSession(sessionId) {
+    if (!sessionId || !currentUsername) return;
+    console.log(`用户 ${currentUsername} 正在加载会话: ${sessionId}`);
+    
+    // 清空现有聊天记录
+    document.getElementById('chatArea').innerHTML = '';
+    addMessage('ai', '正在加载历史消息...', true); // 显示加载提示
+
     try {
-        const response = await fetch(`/api/load_session?session=${sessionId}&user=${encodeURIComponent(username)}`);
+        const response = await fetch(`/api/load_session?session=${sessionId}`);
+
+        const loadingMessage = document.querySelector('.message.ai-message .loading-dots');
+        if(loadingMessage) loadingMessage.closest('.message.ai-message').remove();
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({error: '无法加载会话'}));
+            throw new Error(errorData.error);
+        }
+
         const data = await response.json();
 
         if (data.success) {
-            const chatArea = document.getElementById('chatArea');
-            chatArea.innerHTML = '';
-
-            data.messages.forEach(message => {
-                addMessage(message.sender, message.text);
+            data.messages.forEach(msg => {
+                // 后端返回的 sender 是 'user' 或 'ai'
+                // 后端返回的 text 可能是字符串或对象，addMessage 会处理
+                addMessage(msg.sender, msg.text);
             });
-
-            chatArea.scrollTop = chatArea.scrollHeight;
-        
-            const sidebar = document.getElementById('sidebar');
-            if (sidebar.classList.contains('active')) {
-                 toggleSidebar();
-            }
-            console.log(`会话 ${sessionId} 加载成功`);
         } else {
-            showError(data.error || `无法加载会话 ${sessionId}`);
+            showError(data.error || '加载会话失败。');
         }
     } catch (error) {
-        showError('加载会话时发生网络错误: ' + error);
-        console.error("加载会话错误:", error);
+        console.error("加载会话内容失败:", error);
+        showError(`加载会话失败: ${error.message}`);
     }
 }
 
@@ -508,7 +507,7 @@ function triggerCsvUpload() {
 // 处理文件选择和上传
 async function handleCsvFileSelect(event) {
     if (!currentUsername) {
-        showError("用户未登录，无法上传文件。");
+        showError("请先登录再上传文件！");
         return;
     }
 
@@ -517,20 +516,12 @@ async function handleCsvFileSelect(event) {
         return;
     }
 
-    const fileName = file.name.toLowerCase();
-    const allowedExtensions = ['.csv'];
-    const allowedMimeTypes = ['text/csv', 'application/vnd.ms-excel', ''];
-
-
-    if (!allowedExtensions.some(ext => fileName.endsWith(ext)) || !allowedMimeTypes.includes(file.type)) {
-        showError('请选择一个有效的 CSV 文件 (.csv)。');
-        event.target.value = null;
-        return;
-    }
+    // 显示加载动画
+    addMessage('user', `正在上传文件: ${file.name}`);
+    addMessage('ai', '', true);
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('username', currentUsername);
 
     if (uploadCsvButton) {
         uploadCsvButton.textContent = '上传中...';

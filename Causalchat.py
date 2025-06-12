@@ -31,6 +31,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 app = Flask(__name__, static_folder='static')
+# --- 新增：为 Flask Sessions 设置密钥 ---
+# 会话管理（例如登录状态）需要一个密钥来对 cookie 进行加密签名。
+# 这是支持多用户并发会话的基础。
+# 我们将从 secrets.json 文件中加载它。
+app.secret_key = None 
+# ------------------------------------
+
 current_session = str(uuid.uuid4()) ## 全局会话 ID，现在主要由前端在加载历史时设置
 BASE_DIR = os.path.dirname(__file__)
 # --- 新增：确保图表目录存在 ---
@@ -41,8 +48,6 @@ SETTING_DIR = os.path.join(BASE_DIR, "setting")
 DATABASE_PATH = None # <-- 修改：不再直接使用 SQLite 文件路径
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 SECRETS_PATH = os.path.join(BASE_DIR, "secrets.json")
-
-current_logged_in_user = None
 
 # --- 修改：全局状态管理 ---
 # 将 MCP 和事件循环相关的状态集中管理
@@ -71,6 +76,9 @@ def load_api_config():
         global current_api, current_model, BASE_URL, apikey
         global MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 
+        # --- 新增：添加 SECRET_KEY 到必需列表 ---
+        required_keys_app = ["SECRET_KEY"]
+        # ------------------------------------
         required_keys_zhipu = ["API_KEY", "BASE_URL", "MODEL"] # 假设你的 secrets.json 用的是这些键
         required_keys_db = ["MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"]
 
@@ -78,6 +86,14 @@ def load_api_config():
             if os.path.exists(SECRETS_PATH):
                 with open(SECRETS_PATH, "r", encoding="utf-8") as f:
                     secrets_data = json.load(f)
+
+                    # --- 新增：检查并加载应用密钥 ---
+                    for key in required_keys_app:
+                        if key not in secrets_data:
+                            logging.error(f"关键应用配置 '{key}' 未在 {SECRETS_PATH} 中找到。")
+                            raise ValueError(f"配置错误: {SECRETS_PATH} 中缺少 '{key}'")
+                    app.secret_key = secrets_data["SECRET_KEY"]
+                    # ----------------------------------
 
                     # 检查并加载智谱AI配置
                     for key in required_keys_zhipu:
@@ -123,29 +139,28 @@ load_api_config()
 
 def load_config():
     """从 config.json 加载配置"""
-    global current_logged_in_user
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
-                current_logged_in_user = config_data.get("logged_in_user") # 读取已登录用户
-                logging.info(f"从配置文件加载登录用户: {current_logged_in_user}")
                 return config_data
         else:
             logging.info(f"配置文件 {CONFIG_PATH} 不存在，将创建。")
-            # 文件不存在，返回默认空配置，并初始化 current_logged_in_user 为 None
-            current_logged_in_user = None
-            return {"logged_in_user": None}
+            # 文件不存在，返回默认空配置
+            return {} # 返回一个空字典或包含其他非用户配置的字典
     except (json.JSONDecodeError, IOError) as e:
         logging.error(f"读取配置文件 {CONFIG_PATH} 时出错: {e}。将使用默认配置。")
         # 文件损坏或读取错误，同样返回默认
-        current_logged_in_user = None
-        return {"logged_in_user": None}
+        return {}
 
 def save_config(config_data):
     """将配置数据保存到 config.json"""
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            # --- 移除：确保不保存用户信息 ---
+            # 我们从 config_data 中移除 logged_in_user (如果存在)，以防旧代码调用
+            config_data.pop("logged_in_user", None)
+            # --------------------------------
             json.dump(config_data, f, indent=4, ensure_ascii=False)
         logging.info(f"配置已保存到 {CONFIG_PATH}")
     except IOError as e:
@@ -461,7 +476,9 @@ def handle_register():
 
 @app.route('/api/login', methods=['POST'])
 def handle_login():
-    global current_logged_in_user # 声明要修改全局变量
+    # --- 重构：使用 Flask Session 进行会话管理 ---
+    from flask import session
+
     data = request.json
     username = data.get('username')
     hashed_password_from_client = data.get('password') # 前端已经哈希过了
@@ -478,13 +495,15 @@ def handle_login():
     stored_hashed_password = user_data["password_hash"]
     if stored_hashed_password == hashed_password_from_client:
         logging.info(f"用户登录成功: {username}")
-        # --- 修改：更新并保存配置 ---
-        # 这里是检测目前登录的用户
-        current_logged_in_user = username # 更新全局变量
-        config["logged_in_user"] = username # 更新配置字典
-        save_config(config) # 保存到文件
-        # --------------------------
-        return jsonify({'success': True, 'username': username}) # 保持现有返回结构
+        
+        # --- 核心修改：在 Session 中存储用户信息 ---
+        session.clear() # 先清除旧的会话数据
+        session['user_id'] = user_data['id']
+        session['username'] = user_data['username']
+        # Session 会自动通过浏览器 cookie 维护状态，不再需要文件
+        # -----------------------------------------
+        
+        return jsonify({'success': True, 'username': username})
     else:
         logging.warning(f"用户登录失败（密码错误）: {username}")
         return jsonify({'success': False, 'error': '密码错误'}), 401 # 401 Unauthorized
@@ -492,15 +511,16 @@ def handle_login():
 # 登出
 @app.route('/api/logout', methods=['POST'])
 def handle_logout():
-    global current_logged_in_user
-    logged_out_user = current_logged_in_user # 获取当前登录用户，用于日志记录
-    logging.info(f"用户 {logged_out_user} 请求退出登录")
+    # --- 重构：使用 Flask Session ---
+    from flask import session
+    
+    # 从会话中获取用户名用于日志记录
+    username = session.get('username', '未知用户')
+    logging.info(f"用户 {username} 请求退出登录")
 
-    # --- 清除配置 ---
-    current_logged_in_user = None # 清除全局变量
-    config["logged_in_user"] = None # 更新配置字典
-    save_config(config) # 保存到文件
-    # ----------------
+    # --- 核心修改：清除会话 ---
+    session.clear()
+    # -------------------------
 
     return jsonify({'success': True})
 
@@ -508,11 +528,14 @@ def handle_logout():
 @app.route('/api/check_auth', methods=['GET'])
 def check_auth():
     """检查当前后端记录的登录状态"""
-    if current_logged_in_user:
-        logging.debug(f"检查认证状态：用户 '{current_logged_in_user}' 已登录")
-        return jsonify({'isLoggedIn': True, 'username': current_logged_in_user})
+    # --- 重构：检查 Flask Session ---
+    from flask import session
+    if 'user_id' in session and 'username' in session:
+        username = session['username']
+        logging.debug(f"检查认证状态：用户 '{username}' (通过会话) 已登录")
+        return jsonify({'isLoggedIn': True, 'username': username})
     else:
-        logging.debug("检查认证状态：无用户登录")
+        logging.debug("检查认证状态：无有效会话")
         return jsonify({'isLoggedIn': False})
 
 
@@ -586,26 +609,35 @@ def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Eve
 # 利用flask的jsonify的框架，将后端处理转发到前端
 @app.route('/api/send', methods=['POST'])
 def handle_message():
+    # --- 重构：从 Session 获取用户身份 ---
+    from flask import session
+    if 'user_id' not in session or 'username' not in session:
+        return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
+    
+    user_id = session['user_id']
+    username = session['username']
+    # -----------------------------------
+
     data = request.json
     user_input = data.get('message', '')
-    username = data.get('username') # **新增：** 获取用户名
+    # username = data.get('username') # **移除：** 不再从请求体获取用户名
 
-    if not username:
-         logging.warning("收到发送消息请求，但缺少用户名")
-         return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
+    # if not username:
+    #      logging.warning("收到发送消息请求，但缺少用户名")
+    #      return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
 
-    user_data = find_user(username) # 获取用户数据，包括 id
-    if not user_data:
-        logging.error(f"处理消息时用户 '{username}' 未找到。")
-        return jsonify({'success': False, 'error': '用户认证失败'}), 401
+    # user_data = find_user(username) # 获取用户数据，包括 id
+    # if not user_data:
+    #     logging.error(f"处理消息时用户 '{username}' 未找到。")
+    #     return jsonify({'success': False, 'error': '用户认证失败'}), 401
     
-    user_id = user_data['id'] # 提取 user_id
+    # user_id = user_data['id'] # 提取 user_id
 
     logging.info(f"用户 {username} (ID: {user_id}) 发送消息: {user_input[:50]}...") # 日志记录
 
     try:
-        # 修正: 将异步任务提交到后台循环，并等待结果
-        future = asyncio.run_coroutine_threadsafe(ai_call(user_input, username), background_loop)
+        # --- 核心修改：传递 user_id 和 username 到 ai_call ---
+        future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username), background_loop)
         response = future.result()  # 这会阻塞当前线程直到异步任务完成
 
         save_chat(user_id, user_input, response)
@@ -626,20 +658,14 @@ def new_chat():
     return jsonify({'success': True})
 
 # --- 核心修改：重构 ai_call 函数以使用持久连接 ---
-async def ai_call(text, username):
+async def ai_call(text, user_id, username):
     """
     使用全局持久化的 MCP 会话与 LLM 交互并调用工具。
     不再在每次调用时创建或销毁连接。
     """
-    # --- 新增：获取上下文 ---
-    user_data = find_user(username)
-    if not user_data:
-        logging.error(f"ai_call: 未找到用户 '{username}'，无法获取历史记录。")
-        history_messages = []
-    else:
-        user_id = user_data['id']
-        history_messages = get_chat_history(current_session, user_id, limit=20)
-    # -------------------------
+    # --- 修改：上下文获取逻辑现在直接使用传入的 user_id ---
+    history_messages = get_chat_history(current_session, user_id, limit=20)
+    # ----------------------------------------------------
 
     client = OpenAI(base_url=BASE_URL, api_key=apikey)
     
@@ -686,6 +712,7 @@ async def ai_call(text, username):
         function_name = tool_call.function.name
         function_args = json.loads(tool_call.function.arguments)
         
+        # --- 核心修改：将从 session 中获得的安全 username 传递给工具 ---
         function_args['username'] = username
         logging.info(f"调用工具 '{function_name}'，增强后参数: {function_args}")
         
@@ -772,17 +799,26 @@ def save_chat(user_id, user_msg, ai_response): # 修改：username -> user_id, a
 # 会话管理接口 (**修改：** 过滤用户)
 @app.route('/api/sessions')
 def get_sessions():
-    username = request.args.get('user') # **新增：** 从查询参数获取用户名
-    if not username:
-        logging.warning("获取会话列表请求缺少用户名")
-        return jsonify({"error": "需要提供用户名"}), 400
-
-    user_data = find_user(username) # 获取用户数据
-    if not user_data:
-        logging.warning(f"用户 {username} 请求会话列表，但用户不存在")
-        return jsonify({"error": "用户不存在"}), 404 # 404 Not Found 似乎更合适
+    # --- 重构：从 Session 获取用户身份 ---
+    from flask import session
+    if 'user_id' not in session or 'username' not in session:
+        return jsonify({"error": "用户未登录或会话已过期"}), 401
     
-    user_id = user_data['id'] # 提取 user_id
+    user_id = session['user_id']
+    username = session['username']
+    # ------------------------------------
+    
+    # username = request.args.get('user') # **移除：** 不再从查询参数获取用户名
+    # if not username:
+    #     logging.warning("获取会话列表请求缺少用户名")
+    #     return jsonify({"error": "需要提供用户名"}), 400
+
+    # user_data = find_user(username) # 获取用户数据
+    # if not user_data:
+    #     logging.warning(f"用户 {username} 请求会话列表，但用户不存在")
+    #     return jsonify({"error": "用户不存在"}), 404 # 404 Not Found 似乎更合适
+    
+    # user_id = user_data['id'] # 提取 user_id
 
     logging.info(f"用户 {username} (ID: {user_id}) 请求会话列表")
     sessions = {}
@@ -857,20 +893,29 @@ def get_sessions():
 # 加载特定会话内容 (**修改：** 增加用户验证)
 @app.route('/api/load_session')
 def load_session_content():
+    # --- 重构：从 Session 获取用户身份 ---
+    from flask import session
+    if 'user_id' not in session or 'username' not in session:
+        return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
+    
+    user_id = session['user_id']
+    username = session['username']
+    # ------------------------------------
+
     global current_session # 声明我们要修改全局变量
     session_id = request.args.get('session')
-    username = request.args.get('user') #  获取用户名
+    # username = request.args.get('user') #  移除：不再从请求获取用户名
 
-    if not session_id or not username:
-        logging.warning("加载会话请求缺少 session_id 或 username")
-        return jsonify({"success": False, "error": "缺少 session ID 或用户名"}), 400
+    if not session_id: # 只需检查 session_id
+        logging.warning("加载会话请求缺少 session_id")
+        return jsonify({"success": False, "error": "缺少 session ID"}), 400
 
-    user_data = find_user(username) # 获取用户数据
-    if not user_data:
-        logging.warning(f"用户 {username} 请求加载会话，但用户不存在")
-        return jsonify({"success": False, "error": "用户不存在或无法加载会话"}), 404
+    # user_data = find_user(username) # 获取用户数据
+    # if not user_data:
+    #     logging.warning(f"用户 {username} 请求加载会话，但用户不存在")
+    #     return jsonify({"success": False, "error": "用户不存在或无法加载会话"}), 404
 
-    user_id = user_data['id'] # 提取 user_id
+    # user_id = user_data['id'] # 提取 user_id
 
     logging.info(f"用户 {username} (ID: {user_id}) 请求加载会话: {session_id}")
 
@@ -955,16 +1000,25 @@ def setting():
 ## 上传文件
 @app.route('/api/upload_file', methods=['POST'])
 def upload_file():
-    username = request.form.get('username')
-    if not username:
-        logging.warning("CSV上传请求缺少用户名")
-        return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
+    # --- 重构：从 Session 获取用户身份 ---
+    from flask import session
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
+    
+    user_id = session['user_id']
+    username = session.get('username', '未知用户') # 用于日志
+    # ------------------------------------
 
-    user_data = find_user(username)
-    if not user_data:
-        logging.warning(f"用户 {username} 尝试上传CSV，但用户不存在")
-        return jsonify({'success': False, 'error': '用户认证失败'}), 401
-    user_id = user_data['id']
+    # username = request.form.get('username') # 移除
+    # if not username:
+    #     logging.warning("CSV上传请求缺少用户名")
+    #     return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
+
+    # user_data = find_user(username)
+    # if not user_data:
+    #     logging.warning(f"用户 {username} 尝试上传CSV，但用户不存在")
+    #     return jsonify({'success': False, 'error': '用户认证失败'}), 401
+    # user_id = user_data['id']
     
     if 'file' not in request.files:
         logging.warning(f"用户 {username} 上传CSV请求中没有文件部分")
