@@ -14,6 +14,7 @@ const settingContentDisplay = document.getElementById('settingContentDisplay'); 
 const backToSettingsButton = document.getElementById('backToSettingsButton'); // 获取返回按钮
 const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上传器
 const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上传按钮
+const chatArea = document.getElementById('chatArea');
 // --- 新增：全局变量存储当前会话的用户名 ---
 let currentUsername = null;
 
@@ -112,7 +113,6 @@ async function handleLogin() {
 
         if (data.success && data.username) { // 确保返回了 username
             // 登录成功
-            // localStorage.setItem('loggedInUser', data.username); // <-- 移除
             currentUsername = data.username; // **修改**: 设置全局变量
             document.body.classList.add('logged-in'); // 添加标记类
             authOverlay.classList.remove('active'); // 隐藏登录/注册层
@@ -134,7 +134,6 @@ async function handleLogin() {
 
 // 处理退出登录 - **修改**
 async function handleLogout() {
-    // const username = localStorage.getItem('loggedInUser'); // <-- 移除
     const username = currentUsername; // **修改**: 使用全局变量获取当前用户 (主要用于日志)
     if (!username) return; // 如果没有当前用户，直接返回
 
@@ -147,7 +146,6 @@ async function handleLogout() {
 
         if (data.success) {
             console.log("后端登出成功");
-            // localStorage.removeItem('loggedInUser'); // <-- 移除
             currentUsername = null; // **修改**: 清除全局变量
             document.body.classList.remove('logged-in'); // 移除标记类
             authOverlay.classList.add('active'); // 显示登录/注册层
@@ -168,7 +166,6 @@ async function handleLogout() {
     }
 }
 
-// 检查登录状态 (页面加载时调用) - **修改**
 async function checkLoginStatus() {
     console.log("检查后端认证状态...");
     try {
@@ -207,7 +204,6 @@ async function checkLoginStatus() {
 
 // 更新用户界面信息（例如头像区域） - 
 function updateUserInfo() {
-    // const loggedInUser = localStorage.getItem('loggedInUser'); // <-- 移除
     if (currentUsername) { // : 使用全局变量
         userAvatar.textContent = currentUsername.charAt(0).toUpperCase(); // 显示用户名首字母
         userInfoContent.textContent = `账号: ${currentUsername}`; // 设置弹窗内容
@@ -219,7 +215,6 @@ function updateUserInfo() {
 
 // 显示用户信息弹窗 - **修改**
 function showUserInfoPopup() {
-    // if (!localStorage.getItem('loggedInUser')) return; // <-- 移除
      if (!currentUsername) return; // **修改**: 使用全局变量
     userInfoPopup.classList.add('active');
 }
@@ -289,7 +284,6 @@ async function handleSettingOption(optionId) {
         console.error("处理设置选项时出错:", error);
         // 显示网络或请求错误信息
         settingContentDisplay.innerHTML = `<p style="color: red;">加载内容时出错: ${error.message}</p>`;
-        // showError(`加载内容时出错: ${error.message}`); // 也可以用 alert
     }
 }
 
@@ -301,9 +295,8 @@ function showSettingOptions() {
     backToSettingsButton.style.display = 'none'; // 隐藏返回按钮
     settingContentDisplay.innerHTML = ''; // 清空内容，避免下次直接显示旧内容
 }
-// --- 修改现有函数以包含登录检查和用户名 ---
 
-// 初始化 (不变)
+// 初始化
 document.getElementById('messageInput').addEventListener('keypress', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -311,88 +304,101 @@ document.getElementById('messageInput').addEventListener('keypress', (e) => {
     }
 });
 
-// API交互，使用异步调用，防止页面阻塞 - **修改**
 async function sendMessage() {
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
-    const loggedInUser = currentUsername; // **修改**: 使用全局变量
 
     if (!message) return;
+    if (!currentUsername) {
+        showError("请先登录！");
+        return;
+    }
 
-     // 检查是否登录
-     if (!loggedInUser) {
-         showError("请先登录！");
-         return;
-     }
+    // 1. Add user's message to the chat
+    addMessage('user', message);
+    input.value = ''; // Clear the input field
 
-    addMessage(message, 'user');
-    input.value = '';//清空输入框内容。
+    // 2. Add a loading placeholder for the AI response and get a reference to its content element
+    const aiMessageContent = addMessage('ai', '', true);
 
     try {
-        const response = await fetch('/api/send', {
+        const res = await fetch('/api/send', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            //  发送消息和用户名 (这里逻辑不变，因为之前已从变量获取)
-            body: JSON.stringify({ message: message, username: loggedInUser })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: message, username: currentUsername })
         });
 
-        const data = await response.json();
-        if (data.success) {
-            addMessage(data.response, 'ai');
-            // 可以在这里考虑是否需要更新历史列表预览，目前不刷新
-        } else {
-            showError(data.error);
+        // Clear the loading state
+        aiMessageContent.innerHTML = '';
+        aiMessageContent.classList.remove('loading');
+
+        if (!res.ok) {
+            const errorData = await res.json().catch(() => ({ error: '无法解析服务器错误响应' }));
+            throw new Error(errorData.error || '服务器返回了一个错误');
         }
+
+        const data = await res.json();
+        
+        // Process the successful response
+        if (data.success) {
+            const response = data.response;
+
+            if (response.type === 'causal_graph' && response.data) {
+                // Handle causal graph response
+                const summaryDiv = document.createElement('div');
+                summaryDiv.innerHTML = marked.parse(response.summary || '已生成因果图，见下：');
+                aiMessageContent.appendChild(summaryDiv);
+                
+                const graphContainerId = `graph-${Date.now()}`;
+                const graphDiv = document.createElement('div');
+                graphDiv.id = graphContainerId;
+                graphDiv.className = 'causal-graph-container';
+                aiMessageContent.appendChild(graphDiv);
+
+                renderCausalGraph(graphContainerId, response.data);
+
+            } else {
+                // Handle plain text response
+                aiMessageContent.innerHTML = marked.parse(response.summary || '抱歉，我无法回答这个问题。');
+            }
+        } else {
+            aiMessageContent.textContent = `错误: ${data.error || '未知错误'}`;
+        }
+
     } catch (error) {
-        showError('与服务器通信时出错: '+ error);
+        console.error('发送消息失败:', error);
+        if (aiMessageContent) {
+            aiMessageContent.innerHTML = ''; // Ensure loading content is gone
+            aiMessageContent.classList.remove('loading');
+            aiMessageContent.textContent = `请求失败: ${error.message}`;
+        }
+    } finally {
+        chatArea.scrollTop = chatArea.scrollHeight;
     }
 }
 
-// 界面更新
-function addMessage(text, sender) {
-    const chatArea = document.getElementById('chatArea'); // 获取聊天区域
-    const div = document.createElement('div');//使用 在内存中创建一个新的、空白的 div 元素
-    div.className = `message ${sender}-message`; // 类名保持不变
-     // 它会包含 'message' 类和根据发送者是 'user' 还是 'ai' 动态添加的 'user-message' 或 'ai-message' 类。这对应了 CSS 中的样式规则。
-     if (sender === 'ai') {
-    div.innerHTML = marked.parse(text);
-} else {
-    // 用户消息仍然使用 textContent 以防止 XSS
-    div.textContent = text;
-}
-    chatArea.appendChild(div);
-    // 修改滚动逻辑，滚动聊天区域而不是整个 body
-    chatArea.scrollTop = chatArea.scrollHeight; 
-    // `chatArea.scrollHeight` 是 `chatArea` 内部内容的总高度（即使内容超出了可见区域）。
-     // `chatArea.scrollTop` 是 `chatArea` 向上滚动的距离。将其设置为 `scrollHeight` 意味着滚动到最底部，使用户能看到最新的消息。
-    
-}
-
-// 显示错误 (不变)
+// 显示错误
 function showError(msg) {
-    // 考虑将错误显示在更友好的地方，而不是 alert
     console.error('错误:', msg);
     alert('发生错误: ' + msg);
 }
 
-// 创建新会话 - **修改**
+// 创建新会话
 function newChat() {
-     // const loggedInUser = localStorage.getItem('loggedInUser'); // <-- 移除
-     const loggedInUser = currentUsername; // **修改**: 使用全局变量
+     const loggedInUser = currentUsername;
      if (!loggedInUser) {
          showError("请先登录！");
          return;
      }
 
     if (confirm("确定要开始一个新的会话吗？\n（当前聊天记录会保存，可在历史中找回）")) {
-        // 调用 /api/new_chat (这个接口本身不需要用户名)
         fetch('/api/new_chat', { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    document.getElementById('chatArea').innerHTML = ''; // 清空聊天区域
+                    document.getElementById('chatArea').innerHTML = '';
                     console.log("新会话已创建，重新加载历史记录...");
-                    loadHistory(); // 重新加载历史
+                    loadHistory();
                 } else {
                     showError(data.error);
                 }
@@ -400,10 +406,9 @@ function newChat() {
     }
 }
 
-// 新增侧边栏切换功能 - **修改**
+// 新增侧边栏切换功能
 function toggleSidebar() {
-    // if (!localStorage.getItem('loggedInUser')) return; // <-- 移除
-    if (!currentUsername) return; // **修改**: 使用全局变量
+    if (!currentUsername) return;
 
     const sidebar = document.getElementById('sidebar');
     const main = document.getElementById('mainContainer');
@@ -414,10 +419,9 @@ function toggleSidebar() {
     body.classList.toggle('sidebar-active');
 }
 
-// 加载历史记录 (修改为加载当前用户的历史) - **修改**
+// 加载历史记录
 function loadHistory() {
-     // const loggedInUser = localStorage.getItem('loggedInUser'); // <-- 移除
-     const loggedInUser = currentUsername; //  使用全局变量
+     const loggedInUser = currentUsername;
      if (!loggedInUser) {
          console.log("用户未登录，不加载历史记录。");
          historyList.innerHTML = '<p style="padding: 10px; color: #888;">请先登录以查看历史记录。</p>';
@@ -425,11 +429,10 @@ function loadHistory() {
      }
 
     console.log(`为用户 ${loggedInUser} 加载历史记录...`);
-    //  在请求中加入用户名 (这里逻辑不变，因为之前已从变量获取)
     fetch(`/api/sessions?user=${encodeURIComponent(loggedInUser)}`)
         .then(response => response.json())
         .then(data => {
-            historyList.innerHTML = ''; // 清空
+            historyList.innerHTML = '';
 
             if (data.error) {
                  console.error("加载历史记录失败:", data.error);
@@ -453,12 +456,10 @@ function loadHistory() {
                 item.className = 'history-item';
                 let formattedTime = "时间未知";
                 try {
-                     // 尝试解析时间，如果 sessionData 或 last_time 不存在，会自然出错
                     formattedTime = new Date(sessionData.last_time).toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' });
                 } catch (e) {
                     console.warn(`无法解析会话 ${sessionId} 的时间: ${sessionData?.last_time}`);
                 }
-                 // 增加预览文本的健壮性
                  const previewText = sessionData?.preview || "无预览";
 
                 item.innerHTML = `
@@ -467,7 +468,6 @@ function loadHistory() {
                     </div>
                     <div class="preview-text">${previewText}</div>
                 `;
-                // **修改：** 加载会话时也需要用户名
                 item.onclick = () => loadSession(sessionId, loggedInUser);
                 historyList.appendChild(item);
             });
@@ -480,40 +480,34 @@ function loadHistory() {
 // 页面加载完成时
 document.addEventListener('DOMContentLoaded', () => {
     console.log("DOM 已加载，检查登录状态...");
-    checkLoginStatus(); // 检查登录状态 (这个函数现在会调用 /api/check_auth)
+    checkLoginStatus();
 
-
-// 添加CSV上传功能
-if (csvUploaderInput) {
-    csvUploaderInput.addEventListener('change', handleCsvFileSelect);
-}
+    if (csvUploaderInput) {
+        csvUploaderInput.addEventListener('change', handleCsvFileSelect);
+    }
 });
 
 
-// 加载特定会话内容 (修改为需要用户名) - 
-async function loadSession(sessionId, username) { // 参数 username 仍然需要
-     // const loggedInUser = currentUsername; // 可以用全局变量再次确认，但参数传递更直接
-     if (!username || username !== currentUsername) { //  做个检查，确保是当前登录用户在操作
+// 加载特定会话内容
+async function loadSession(sessionId, username) {
+     if (!username || username !== currentUsername) {
          showError("无法加载会话：用户状态异常或权限不足。");
          console.warn(`尝试加载会话 ${sessionId} 但参数用户 ${username} 与当前登录用户 ${currentUsername} 不匹配。`);
          return;
      }
     console.log(`用户 ${username} 尝试加载会话: ${sessionId}`);
     try {
-        //  在请求中加入用户名 (这里逻辑不变)
         const response = await fetch(`/api/load_session?session=${sessionId}&user=${encodeURIComponent(username)}`);
         const data = await response.json();
 
         if (data.success) {
             const chatArea = document.getElementById('chatArea');
-            chatArea.innerHTML = ''; // 清空当前聊天区域
+            chatArea.innerHTML = '';
 
-            // 遍历返回的消息并添加到聊天区
             data.messages.forEach(message => {
-                addMessage(message.text, message.sender);
+                addMessage(message.sender, message.text);
             });
 
-            // 确保滚动到底部
             chatArea.scrollTop = chatArea.scrollHeight;
         
             const sidebar = document.getElementById('sidebar');
@@ -535,44 +529,38 @@ function triggerCsvUpload() {
         showError("请先登录才能上传文件！");
         return;
     }
-    // 模拟点击隐藏的文件输入框
     if (csvUploaderInput) {
         csvUploaderInput.click();
     }
 }
 
-// --- 新增：处理文件选择和上传的函数 ---
+// 处理文件选择和上传
 async function handleCsvFileSelect(event) {
     if (!currentUsername) {
-        showError("用户未登录，无法上传文件。"); // 再次检查以防万一
+        showError("用户未登录，无法上传文件。");
         return;
     }
 
-    const file = event.target.files[0]; // 获取用户选择的第一个文件
+    const file = event.target.files[0];
     if (!file) {
-        return; // 用户可能取消了选择
+        return;
     }
 
-    // 简单的客户端文件类型检查 (主要为了改善用户体验，服务器端验证是必须的)
-    // 浏览器对MIME类型的报告可能不完全一致，所以主要依赖扩展名，并对MIME类型做宽松检查
     const fileName = file.name.toLowerCase();
     const allowedExtensions = ['.csv'];
-    // 有些浏览器对CSV的MIME类型可能是 'application/vnd.ms-excel' 或空字符串
     const allowedMimeTypes = ['text/csv', 'application/vnd.ms-excel', ''];
 
 
     if (!allowedExtensions.some(ext => fileName.endsWith(ext)) || !allowedMimeTypes.includes(file.type)) {
         showError('请选择一个有效的 CSV 文件 (.csv)。');
-        event.target.value = null; // 清空文件选择，以便用户可以重新选择相同的文件
+        event.target.value = null;
         return;
     }
 
-    // 创建 FormData 对象来包装文件数据
     const formData = new FormData();
-    formData.append('file', file); // 'file' 必须与后端 request.files['file'] 的键名一致
-    formData.append('username', currentUsername); // 将当前用户名也发送过去
+    formData.append('file', file);
+    formData.append('username', currentUsername);
 
-    // 禁用上传按钮，防止重复提交
     if (uploadCsvButton) {
         uploadCsvButton.textContent = '上传中...';
         uploadCsvButton.disabled = true;
@@ -581,15 +569,13 @@ async function handleCsvFileSelect(event) {
     try {
         const response = await fetch('/api/upload_file', {
             method: 'POST',
-            body: formData, // 发送 FormData 时，浏览器会自动设置正确的 Content-Type (multipart/form-data)
-            // 不需要手动设置 headers: {'Content-Type': 'multipart/form-data'}
+            body: formData,
         });
 
         const data = await response.json();
 
         if (data.success) {
             alert(data.message || '文件上传成功！');
-            // 可选：上传成功后可以执行其他操作，例如刷新文件列表（如果未来有的话）
         } else {
             showError(data.error || '文件上传失败。');
         }
@@ -597,11 +583,106 @@ async function handleCsvFileSelect(event) {
         console.error("CSV Upload error:", error);
         showError('上传文件时发生网络错误。');
     } finally {
-        // 无论成功与否，恢复上传按钮状态并清空文件选择
         if (uploadCsvButton) {
             uploadCsvButton.textContent = '上传';
             uploadCsvButton.disabled = false;
         }
-        event.target.value = null; // 清空<input type="file">的值，允许用户再次选择同一个文件
+        event.target.value = null;
     }
+}
+
+// --- 新增：渲染因果图表的函数 ---
+function renderCausalGraph(containerId, graphData) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        console.error(`图表容器 #${containerId} 未找到。`);
+        return;
+    }
+
+    const nodes = new vis.DataSet(graphData.nodes);
+    const edges = new vis.DataSet(graphData.edges);
+
+    const data = {
+        nodes: nodes,
+        edges: edges,
+    };
+
+    const options = {
+        layout: {
+            hierarchical: {
+                enabled: false,
+            },
+        },
+        physics: {
+            enabled: true,
+            solver: 'forceAtlas2Based',
+            forceAtlas2Based: {
+                gravitationalConstant: -50,
+                centralGravity: 0.01,
+                springConstant: 0.08,
+                springLength: 100,
+                damping: 0.4,
+                avoidOverlap: 0.5
+            }
+        },
+        nodes: {
+            shape: 'box',
+            size: 16,
+            font: {
+                size: 14,
+                color: '#333'
+            },
+            borderWidth: 1,
+            shadow: true,
+        },
+        edges: {
+            width: 2,
+            shadow: true,
+            smooth: {
+                enabled: true,
+                type: 'dynamic'
+            }
+        },
+        interaction: {
+            dragNodes: true,
+            dragView: true,
+            zoomView: true,
+        },
+    };
+
+    new vis.Network(container, data, options);
+}
+
+function addMessage(sender, text, isLoading = false) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${sender}-message`;
+
+    // Create the main content block
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+
+    if (isLoading) {
+        contentDiv.classList.add('loading');
+        // Add three bouncing dots for loading animation
+        for (let i = 0; i < 3; i++) {
+            const dot = document.createElement('span');
+            dot.className = 'loading-dot';
+            contentDiv.appendChild(dot);
+        }
+    } else {
+        if (sender === 'user') {
+            // For user messages, just use plain text to prevent XSS
+            contentDiv.textContent = text;
+        } else {
+            // For AI messages, parse Markdown
+            contentDiv.innerHTML = marked.parse(text);
+        }
+    }
+
+    messageDiv.appendChild(contentDiv);
+    chatArea.appendChild(messageDiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
+
+    // Return the content element so it can be updated (e.g., from loading to final content)
+    return contentDiv;
 }

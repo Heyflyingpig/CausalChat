@@ -18,6 +18,14 @@ from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
 import threading
 
+# --- 新增：为 Windows 设置 asyncio 事件循环策略 ---
+# 在 Windows 上，默认的 asyncio 事件循环 (SelectorEventLoop) 不支持子进程。
+# MCP 客户端需要通过子进程启动服务器，因此我们必须切换到 ProactorEventLoop。
+# 这行代码必须在任何 asyncio 操作（尤其是创建事件循环）之前执行。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+# ---------------------------------------------
+
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -25,6 +33,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__, static_folder='static')
 current_session = str(uuid.uuid4()) ## 全局会话 ID，现在主要由前端在加载历史时设置
 BASE_DIR = os.path.dirname(__file__)
+# --- 新增：确保图表目录存在 ---
+os.makedirs(os.path.join(BASE_DIR, 'static', 'generated_graphs'), exist_ok=True)
+# -----------------------------
 SETTING_DIR = os.path.join(BASE_DIR, "setting")
 
 DATABASE_PATH = None # <-- 修改：不再直接使用 SQLite 文件路径
@@ -32,6 +43,15 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 SECRETS_PATH = os.path.join(BASE_DIR, "secrets.json")
 
 current_logged_in_user = None
+
+# --- 修改：全局状态管理 ---
+# 将 MCP 和事件循环相关的状态集中管理
+mcp_session: ClientSession | None = None
+mcp_tools: list = []
+mcp_process_stack = AsyncExitStack()
+background_loop: asyncio.AbstractEventLoop | None = None
+# -------------------------
+
 
 # --- 修改：从 secrets.json 加载 API 配置 ---
 
@@ -357,6 +377,39 @@ def register_user(username, hashed_password):
         logging.error(f"注册用户 '{username}' 时发生未知错误: {e}")
         return False, "注册过程中发生服务器错误。"
 
+def get_chat_history(session_id: str, user_id: int, limit: int = 100) -> list:
+    """从数据库获取指定会话的最近聊天记录。"""
+    history = []
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+            # 获取最近的 'limit' 条记录
+            cursor.execute("""
+                SELECT user_msg, ai_msg FROM chat_messages
+                WHERE session_id = %s AND user_id = %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """, (session_id, user_id, limit))
+            recent_chats = cursor.fetchall()
+
+            # 按时间倒序获取，所以要反转回来才是正确的对话顺序
+            for row in reversed(recent_chats):
+                if row['user_msg']:
+                    history.append({"role": "user", "content": row['user_msg']})
+                if row['ai_msg']:
+                    # 注意：OpenAI API 的角色是 'assistant'
+                    history.append({"role": "assistant", "content": row['ai_msg']})
+            
+            logging.info(f"为会话 {session_id} 获取了 {len(history) // 2} 轮对话历史。")
+            return history
+            
+    except mysql.connector.Error as e:
+        logging.error(f"为会话 {session_id} 获取历史记录时数据库出错: {e}")
+        return []
+    except Exception as e:
+        logging.error(f"为会话 {session_id} 获取历史记录时发生未知错误: {e}")
+        return []
+
 # 获取注册值
 @app.route('/api/register', methods=['POST'])
 def handle_register():
@@ -440,18 +493,71 @@ def check_auth():
 
 
 
-# --- 新增: 后台异步事件循环 ---
-def start_event_loop(loop: asyncio.AbstractEventLoop):
-    """在一个线程中启动并永远运行事件循环"""
+# --- 全面重构：MCP生命周期管理与后台事件循环 ---
+
+async def initialize_mcp_connection(ready_event: threading.Event):
+    """
+    在应用启动时启动MCP服务器并建立一个持久的会话。
+    完成后通过 event 通知主线程。
+    """
+    global mcp_session, mcp_tools
+    logging.info("正在初始化持久 MCP 连接...")
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        mcp_server_path = os.path.join(current_dir, "CausalChatMCP", "mcp_server.py")
+        
+        server_params = StdioServerParameters(command=sys.executable, args=[mcp_server_path])
+        
+        read_stream, write_stream = await mcp_process_stack.enter_async_context(stdio_client(server_params))
+        session = await mcp_process_stack.enter_async_context(ClientSession(read_stream, write_stream))
+        await session.initialize()
+        
+        tools_response = await session.list_tools()
+        mcp_tools = [{
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema,
+            }
+        } for tool in tools_response.tools]
+
+        mcp_session = session
+        logging.info(f"MCP服务器连接成功，会话已激活。发现工具: {[tool['function']['name'] for tool in mcp_tools]}")
+        
+    except Exception as e:
+        logging.error(f"严重错误：应用启动时初始化MCP连接失败: {e}", exc_info=True)
+        mcp_session = None
+    finally:
+        logging.info("MCP 初始化过程结束，通知主线程。")
+        ready_event.set()
+
+def shutdown_mcp_connection():
+    """在应用退出时，通过atexit钩子优雅地关闭MCP服务器子进程。"""
+    if background_loop and background_loop.is_running():
+        logging.info("请求关闭 MCP 服务器...")
+        future = asyncio.run_coroutine_threadsafe(mcp_process_stack.aclose(), background_loop)
+        try:
+            future.result(timeout=5)
+            logging.info("MCP 服务器已成功关闭。")
+        except Exception as e:
+            logging.error(f"关闭 MCP 服务器时出错: {e}")
+    else:
+        logging.warning("无法关闭 MCP 服务器：事件循环未运行。")
+
+def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Event):
+    """在一个线程中启动事件循环，并在启动时安排MCP初始化。"""
+    global background_loop
     asyncio.set_event_loop(loop)
+    background_loop = loop
+    
+    loop.create_task(initialize_mcp_connection(ready_event))
+    
+    logging.info("后台事件循环已启动，MCP 初始化任务已安排。")
     loop.run_forever()
 
-# 创建一个全局的事件循环和后台线程
-background_loop = asyncio.new_event_loop()
-loop_thread = threading.Thread(target=start_event_loop, args=(background_loop,), daemon=True)
-loop_thread.start()
-logging.info("后台 asyncio 事件循环线程已启动。")
-# --- 结束新增 ---
+# --- 重构结束 ---
+
 
 # 利用flask的jsonify的框架，将后端处理转发到前端
 @app.route('/api/send', methods=['POST'])
@@ -475,7 +581,7 @@ def handle_message():
 
     try:
         # 修正: 将异步任务提交到后台循环，并等待结果
-        future = asyncio.run_coroutine_threadsafe(ai_call(user_input), background_loop)
+        future = asyncio.run_coroutine_threadsafe(ai_call(user_input, username), background_loop)
         response = future.result()  # 这会阻塞当前线程直到异步任务完成
 
         save_chat(user_id, user_input, response)
@@ -495,137 +601,140 @@ def new_chat():
     # 但对于单用户本地运行或前端驱动会话切换的场景是可行的
     return jsonify({'success': True})
 
-# --- 核心修改：改造 ai_call 函数为一个独立的、无状态的函数 ---
-async def ai_call(text):
+# --- 核心修改：重构 ai_call 函数以使用持久连接 ---
+async def ai_call(text, username):
     """
-    与 LLM 交互，并根据需要通过 MCP 调用工具。
-    这是一个异步函数，每次调用都会建立和断开与MCP服务器的连接。
-    
-     async 关键字告诉Python，这个函数内部可能会包含一些需要“等待”的操作（比如网络请求、文件读写），
-    在等待期间，程序可以先去干点别的事，而不是傻等。
-    这使得它非常适合处理I/O密集型任务。
-    函数内部必须使用 await 关键字来执行这些“等待”操作。
+    使用全局持久化的 MCP 会话与 LLM 交互并调用工具。
+    不再在每次调用时创建或销毁连接。
     """
-    # 获取CausalChat.py所在的目录
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    # 构建到mcp_server.py的相对路径
-    mcp_server_path = os.path.join(current_dir, "CausalChatMCP", "mcp_server.py")
+    # --- 新增：获取上下文 ---
+    user_data = find_user(username)
+    if not user_data:
+        logging.error(f"ai_call: 未找到用户 '{username}'，无法获取历史记录。")
+        history_messages = []
+    else:
+        user_id = user_data['id']
+        history_messages = get_chat_history(current_session, user_id, limit=20)
+    # -------------------------
+
+    client = OpenAI(base_url=BASE_URL, api_key=apikey)
     
-    # 使用一个临时的退出堆栈来管理本次调用的资源
-    #异步上下文管理器，所有进程都会装载到这个AsyncExitStack()中，方便我们后期清理
-    async with AsyncExitStack() as exit_stack:
-        mcp_tools = []
-        session = None
-        try:
-            logging.info("ai_call: 准备连接到 MCP 服务器...")
-            # 启动mcp_server.py子进程，用于将解释器的绝对路劲配置到该py文件中
-            server_params = StdioServerParameters(
-                command=sys.executable, #代表了当前正在运行的Python解释器的绝对路径
-                args=[mcp_server_path] # 启动mcp_server.py子进程，用于将解释器的绝对路劲配置到该py文件中
-            )
-            # stdio_client(server_params) 启动 mcp_server.py 子进程，
-            # 并建立起两者之间的 stdin/stdout 通信管道。
-            # stdio_client成功后返回一个元组，包含了两个关键部分：一个用于从子进程读取数据流，一个用于向子进程写入数据流。我们通过元组解包的方式将它们分别赋给两个变量。
-            read_stream, write_stream = await exit_stack.enter_async_context(stdio_client(server_params))
-            # 创建一个ClientSession对象，用于与MCP服务器进行交互。
-            # 这个对象会处理与MCP服务器的通信细节，比如发送请求、接收响应等。
-            # 它内部会使用read_stream和write_stream来与MCP服务器进行数据交换。
-            session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
-            # 初始化MCP会话，确保MCP服务器已经准备好处理请求。
-            await session.initialize()
-
-            logging.info("ai_call: 成功连接 MCP 服务器，正在获取工具列表...")
-             # mcp_server.py会返回一个列表，包含他所有被 @mcp.tool() 装饰的函数。
-            tools_response = await session.list_tools()
-            # 列表推导式子，将所有mcp语法转化为llm语法
-            mcp_tools = [{
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.inputSchema,
-                }
-            } for tool in tools_response.tools]
-            logging.info(f"ai_call: 发现工具: {[tool['function']['name'] for tool in mcp_tools]}")
-
-        except Exception as e:
-            logging.error(f"连接或设置 MCP 服务器失败: {e}. 将作为普通聊天继续。")
-            # 如果 MCP 失败，mcp_tools 列表将为空，模型将不会尝试使用工具。
-
-        client = OpenAI(base_url=BASE_URL, api_key=apikey)
-        messages = [
-            {"role": "system", "content": "你是一个有用的工程师助手，可以使用工具来获取额外信息。"},
-            {"role": "user", "content": text}
-        ]
-
-        # 第一次调用
-        logging.info("ai_call: 首次调用 LLM...")
+    # 检查MCP会话是否在启动时成功建立
+    if not mcp_session:
+        logging.error("ai_call: MCP会话不可用。将作为普通聊天继续，不使用工具。")
+        
+        messages = [{"role": "system", "content": "你是一个有用的工程师助手，请根据上下文进行回复。"}]
+        messages.extend(history_messages)
+        messages.append({"role": "user", "content": text})
+        
         response = client.chat.completions.create(
             model=current_model,
-            messages=messages,
-            tools=mcp_tools or None, # 如果列表为空，则不传递 tools 参数
-            tool_choice="auto", # 自动选择是否使用工具
+            messages=messages
         )
+        # 保证返回格式一致
+        return {"type": "text", "summary": response.choices[0].message.content}
 
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
-        # 如果工具列表不为空，则调用工具
+    # ---- 使用已建立的会话 ----
+    messages = [
+        {"role": "system", "content": "你是一个有用的工程师助手，可以使用工具来获取额外信息。你的主要任务是分析工具返回的JSON数据，并以清晰、简洁的自然语言向用户总结关键发现。不要在你的回答中逐字重复整个JSON数据。请根据上下文进行回复。"},
+    ]
+    messages.extend(history_messages)
+    messages.append({"role": "user", "content": text})
 
-        if tool_calls and session:
-            logging.info(f"LLM 决定调用工具: {[(call.function.name) for call in tool_calls]}")
-            messages.append(response_message)
+    # 第一次调用
+    logging.info(f"ai_call: 首次调用 LLM，包含 {len(history_messages)} 条历史消息...")
+    response = client.chat.completions.create(
+        model=current_model,
+        messages=messages,
+        tools=mcp_tools or None,
+        tool_choice="auto",
+    )
 
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
-                
-                #客户端通过会话，将工具名和解析好的参数字典发送给mcp_server.py子进程
-                function_response_obj = await session.call_tool(function_name, function_args)
-                function_response_text = function_response_obj.content[0].text
-                # 返回所有内容，包括工具名和解析好的参数字典，这里的参数MCP定义的
-                
-                messages.append({
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": function_response_text,
-                })
-                # 这里返回的是tool角色
-            
-            # 第二次调用
-            logging.info("ai_call: 携带工具结果，再次调用 LLM...")
-            second_response = client.chat.completions.create(
-                model=current_model,
-                messages=messages,
-            )
-            return second_response.choices[0].message.content
-        else:
-            logging.info("ai_call: LLM 未调用工具，直接返回。")
-            return response_message.content
+    response_message = response.choices[0].message
+    tool_calls = response_message.tool_calls
 
+    if tool_calls:
+        logging.info(f"LLM 决定调用工具: {[call.function.name for call in tool_calls]}")
+        messages.append(response_message)
 
+        # 注意：当前设计只处理第一个工具调用
+        tool_call = tool_calls[0]
+        function_name = tool_call.function.name
+        function_args = json.loads(tool_call.function.arguments)
+        
+        function_args['username'] = username
+        logging.info(f"调用工具 '{function_name}'，增强后参数: {function_args}")
+        
+        function_response_obj = await mcp_session.call_tool(function_name, function_args)
+        function_response_text = function_response_obj.content[0].text
+        
+        messages.append({
+            "tool_call_id": tool_call.id,
+            "role": "tool",
+            "name": function_name,
+            "content": function_response_text,
+        })
+        
+        # 第二次调用，让LLM总结工具结果
+        logging.info("ai_call: 携带工具结果，再次调用 LLM...")
+        second_response = client.chat.completions.create(
+            model=current_model,
+            messages=messages,
+        )
+        summary_text = second_response.choices[0].message.content
+
+        # 如果是因果分析工具，则返回结构化数据
+        if function_name == 'perform_causal_analysis':
+            try:
+                analysis_data = json.loads(function_response_text)
+                if analysis_data.get("success"):
+                    logging.info("因果分析成功，返回结构化数据和总结。")
+                    return {
+                        "type": "causal_graph",
+                        "summary": summary_text,
+                        "data": analysis_data.get("data")
+                    }
+            except json.JSONDecodeError:
+                logging.error("无法解析来自因果分析工具的JSON响应。")
+        
+        # 对于其他工具或失败的分析，只返回文本总结
+        logging.info("返回纯文本总结。")
+        return {"type": "text", "summary": summary_text}
+
+    else:
+        logging.info("ai_call: LLM 未调用工具，直接返回。")
+        # 保证返回格式一致
+        return {"type": "text", "summary": response_message.content}
 
 
 ## 保存历史文件 ( 添加 user_id 参数和列)
 def save_chat(user_id, user_msg, ai_msg): # 修改：username -> user_id
     global current_session # 需要访问全局会话ID
-    timestamp_dt = datetime.now() # 获取 datetime 对象
-    # MySQL 的 TIMESTAMP 类型可以直接接受 datetime 对象，无需格式化为字符串
+    timestamp_dt = datetime.now()
+
+    # --- 修改：处理结构化和非结构化的AI回复 ---
+    # 如果 ai_msg 是一个字典 (我们的新格式), 只保存总结部分
+    # 否则 (旧格式或纯文本回复), 直接保存
+    if isinstance(ai_msg, dict) and 'summary' in ai_msg:
+        ai_msg_to_save = ai_msg['summary']
+    elif isinstance(ai_msg, str):
+        ai_msg_to_save = ai_msg
+    else:
+        # 兜底，以防意外格式
+        ai_msg_to_save = json.dumps(ai_msg, ensure_ascii=False)
+    # ---------------------------------------------
 
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # MySQL 使用 %s 作为占位符
             cursor.execute("""
                 INSERT INTO chat_messages (session_id, user_id, user_msg, ai_msg, timestamp)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (current_session, user_id, user_msg, ai_msg, timestamp_dt)) # 修改：使用 user_id 和 datetime 对象
+            """, (current_session, user_id, user_msg, ai_msg_to_save, timestamp_dt))
             conn.commit()
-            # cursor.close()
-        # logging.info(f"聊天记录已保存 (用户 ID: {user_id}, 会话: {current_session})")
-    except mysql.connector.Error as e: # <-- 修改异常类型
+    except mysql.connector.Error as e:
         logging.error(f"保存聊天记录到数据库时出错 (用户 ID: {user_id}, 会话: {current_session}): {e}")
-    except Exception as e: # 捕获其他可能的未知错误
+    except Exception as e:
         logging.error(f"保存聊天时发生未知错误: {e}")
 
 
@@ -801,6 +910,7 @@ def setting():
 
     return jsonify({"success": True, "messages": content})
 
+## 上传文件
 @app.route('/api/upload_file', methods=['POST'])
 def upload_file():
     username = request.form.get('username')
@@ -857,7 +967,7 @@ def upload_file():
             # cursor.close()
         logging.info(f"用户 {username} (ID: {user_id}) 成功上传文件: {original_filename} (MIME: {file.mimetype})")
         return jsonify({'success': True, 'message': f'文件 "{original_filename}" 上传成功！'})
-    except mysql.connector.Error as e: # <-- 修改异常类型
+    except mysql.connector.Error as e:
         logging.error(f"用户 {username} 保存文件 {original_filename} 到数据库时出错: {e}")
         return jsonify({'success': False, 'error': '保存文件到数据库失败'}), 500
     except Exception as e: # 捕获其他可能的未知错误
@@ -872,5 +982,33 @@ def index():
 
 # 主程序入口
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5001, debug=True)
+    # 注册应用退出时的清理函数
+    atexit.register(shutdown_mcp_connection)
+
+    # --- 启动后台事件循环并等待 MCP 就绪 ---
+    mcp_ready_event = threading.Event()
+    
+    background_event_loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(
+        target=start_event_loop, 
+        args=(background_event_loop, mcp_ready_event),
+        daemon=True
+    )
+    loop_thread.start()
+    
+    logging.info("主线程正在等待 MCP 初始化...")
+    is_ready = mcp_ready_event.wait(timeout=30.0)
+
+    if not is_ready:
+        logging.critical("MCP 服务在30秒内未能完成初始化。应用即将退出。")
+        if background_loop and background_loop.is_running():
+            asyncio.run_coroutine_threadsafe(mcp_process_stack.aclose(), background_loop)
+        sys.exit(1)
+
+    if not mcp_session:
+        logging.critical("MCP 初始化完成但会话无效。应用即将退出。")
+        sys.exit(1)
+        
+    logging.info("MCP 服务已就绪，启动 Flask Web 服务器...")
+    app.run(host='127.0.0.1', port=5001, debug=True, use_reloader=False)
     

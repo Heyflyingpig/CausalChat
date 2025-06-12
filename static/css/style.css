@@ -204,6 +204,15 @@
         align-self: flex-start; /* AI 消息靠左 */
         margin-left: 10px; /* 新增：为左侧菜单图标留出空间 */
     }
+        
+    /* 新增：因果图容器样式 */
+    .causal-graph-container {
+        width: 100%;
+        height: 400px; /* 您可以根据需要调整此高度 */
+        border: 1px solid #ddd; /* 添加边框以便清晰看到画布区域 */
+        border-radius: 5px;
+        margin-top: 10px; /* 与上方文本的间距 */
+    }
     
     .preview-text {
         font-size: 0.9em; /* 设置你想要的字体大小，例如 12px 或 0.8em */
