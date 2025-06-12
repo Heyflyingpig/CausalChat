@@ -181,30 +181,63 @@
         background-color: #6c757d;
         cursor: not-allowed;
     }
+
+    /* --- 全面修改消息样式 --- */
     .message {
+        display: flex;
+        align-items: flex-start; /* 头像和内容顶部对齐 */
+        gap: 10px; /* 头像和内容的间距 */
         max-width: 80%;
+        position: relative;
+        z-index: 1;
+        /* 容器本身不应该有背景色或内边距 */
+    }
+    
+    .message .avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background-color: #007bff; /* AI头像的默认颜色 */
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        flex-shrink: 0; /* 防止头像在空间不足时被压缩 */
+    }
+    
+    .message .content {
         padding: 10px 15px;
         border-radius: 10px;
         word-break: break-word;
         line-height: 1.4;
-        position: relative; /* 新增：确保消息在背景文字之上 */
-        z-index: 1;        /* 新增：确保消息在背景文字之上 */
-        background-color: white; /* 给消息一个不透明背景，防止背景文字透过来 */
+        /* 文字气泡是真正有背景色的元素 */
     }
 
     /* 用户消息样式 */
     .user-message {
-        background-color: #dcf8c6;
-        align-self: flex-end; /* 用户消息靠右 */
+        align-self: flex-end; /* 用户消息容器靠右 */
+        
+    }
+
+    .user-message .content {
+        background-color: #dcf8c6; /* 用户的气泡颜色 */
+    }
+
+    .user-message .avatar {
+        background-color: #4CAF50; /* 用户的头像颜色 */
     }
 
     /* AI 消息样式 */
     .ai-message {
-        background-color: #f1f0f0;
-        align-self: flex-start; /* AI 消息靠左 */
-        margin-left: 10px; /* 新增：为左侧菜单图标留出空间 */
+        align-self: flex-start; /* AI消息容器靠左 */
     }
-        
+
+    .ai-message .content {
+        background-color: #f1f0f0; /* AI的气泡颜色 */
+    }
+    /* --- 修改结束 --- */
+
     /* 新增：因果图容器样式 */
     .causal-graph-container {
         width: 100%;
@@ -212,6 +245,7 @@
         border: 1px solid #ddd; /* 添加边框以便清晰看到画布区域 */
         border-radius: 5px;
         margin-top: 10px; /* 与上方文本的间距 */
+        background: #fff; /* 确保图表有白色背景 */
     }
     
     .preview-text {
@@ -516,521 +550,40 @@
         background-color: #5a6268;
     }
     /* 用于诊断为什么整个页面超出限制 */
-    /* 整体页面内容高度超出了视口。不过要注意，这样做可能会隐藏掉本应可见但被“挤出”视口的内容（如果确实有内容被挤出的话） */
+    /* 整体页面内容高度超出了视口。不过要注意，这样做可能会隐藏掉本应可见但被"挤出"视口的内容（如果确实有内容被挤出的话） */
     body{
         overflow: hidden;
     }
 
- /* 这里需要注意几点：
-    1. 空格: 在 CSS 选择器中，空格表示"后代"关系。
-    它意味着后面的元素是前面元素的子元素、孙子元素或更深层级的后代元素。
-    2. 而.sidebar.active: 这部分选中同时拥有 sidebar 类和 active 类的同一个 HTML 元素。*/
-    /* 新增侧边栏样式 
-    */
-    .sidebar {
-        position: fixed;   /* 固定位置（相对于浏览器）*/
-        left: -300px; /* 位于左边缘的-300位置。*/
-        top: 0;  /* 贴紧顶部*/
-        width: 300px;
-        height: 100vh;  /* 相对高度*/
-        background: white;
-        box-shadow: 2px 0 5px rgba(0,0,0,0.1); /* rgba(0,0,0,0.1)` 是阴影的颜色。`rgb(0,0,0)` 
-                                                    是黑色，`a(0.1)` 表示透明度为 10%。*/
-        transition: left 0.3s; /* 设置过渡效果。当 `left` 属性的值发生变化时*/
-        z-index: 1000; /* 堆叠窗格的大小*/
-        display: flex; /* `display: flex` 启用 Flexbox 布局模型。便于该元素的子元素可以更容易地进行排列和对齐。*/
-        flex-direction: column; /* 在 Flexbox 布局下，设置主轴的方向为垂直方向。
-        这意味着侧边栏内部的直接子元素（header, content, footer）会从上到下垂直排列。*/
-        overflow: hidden; /* 防止超出范围*/
+/* --- 新增：AI加载动画 --- */
+@keyframes bouncing-loader {
+    to {
+        opacity: 0.1;
+        transform: translateY(-8px);
     }
-    .sidebar.active { /* 这是sidebar的active组合类*/
-        left: 0; /* 将侧边栏的左边缘设置在浏览器窗口的左边缘，即 `0` 的位置。
-        配合上面的 `transition`，这会使侧边栏从左侧平滑滑入视图。*/
-    }
-    .sidebar-header {   
-        padding: 15px; /* 设置元素内容与其边框之间的内边距。`15px` 表示上下左右都有 15 像素的内边距。*/
-        display: flex;
-        align-items: center; /* 在 Flexbox 的交叉轴，也就是竖向的交叉方向。*/
-        border-bottom: 1px solid #eee; /* 给元素的底部添加一条边框。
-                                          `1px` 是边框的宽度。
-                                          `solid` 是边框的样式（实线）*/
-        justify-content: space-between; /* 在 Flexbox 的主轴（这里是水平方向）上对齐子元素。
-                                           `space-between` 表示子元素沿主轴均匀分布*/
-    }
-    .sidebar-content {
-        flex: 1; /* 这是 Flexbox 布局中的一个缩写属性。`flex: 1` 通常表示 
-                    它表示该元素将占据父容器（`.sidebar`）在主轴（垂直方向）上的所有可用剩余空间。*/
-        overflow-y: auto; /* 增加滚动条 */
-        padding: 15px;
-    }
-    
-    .history-item {
-        padding: 12px;
-        margin: 8px 0; /* 设置外边距。分别是上下，左右*/
-        border: 1px solid #eee; /* 设置边框。*/
-        cursor: pointer; /* 当鼠标悬停在该元素上时，显示小手形状的光标，提示用户这个元素是可以点击的。*/
-        border-radius: 5px; /* 半径：圆角*/
-        display: flex; /* 启用 Flexbox 布局，用于排列条目内部的会话信息和预览文本。*/
-        justify-content: space-between;
-        align-items: center; /* 交叉方向垂直排列。*/
-    }
-    .sidebar-footer {
-        padding: 15px;
-        border-top: 1px solid #eee;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-    .sidebar-toggle {
-        cursor: pointer;
-        font-size: 24px;
-        padding: 5px;
-        display: none;
-    }
-    .sidebar.active .sidebar-toggle {
-        display: block; /* 当侧边栏处于激活（可见）状态时，将这个关闭图标显示出来。*/
-    }
-    .menu-icon {
-        position: fixed;
-        left: 5px;
-        top: 10px;
-        cursor: pointer;
-        z-index: 1001;
-        font-size: 24px; /* 图标大小*/
-        padding: 5px; /* 给图标本身增加一点内边距，扩大可点击区域。*/
-        display: block; /* `block` 元素会占据其父元素的整个宽度，并换行。这里确保图标作为一个块级元素存在。。
-                           初始状态下，这个图标是可见的。*/
-    }
-    /* 3.通过检查 <body> 是否有 sidebar-active 类，就可以方便地控制页面上任何位置的 .menu-icon 的显示状态了。
-        这是一种常用的通过给 body 添加类来管理全局页面状态的方法。 */
-    body.sidebar-active .menu-icon {
-        display: none; /* 将图标隐藏起来。当侧边栏打开时，就不需要显示这个用于打开侧边栏的图标了。*/
-    }
-    
-    /* 主内容区 */
-    .container {
-        margin-left: 0;
-        transition: margin-left 0.3s; /* 当 `margin-left` 属性变化时，
-        在 0.3 秒内平滑过渡。这使得主内容区在侧边栏打开/关闭时能平滑地移动。*/
-        height: 100vh;
-        display: flex;
-        flex-direction: column;
-    }
-    .container.sidebar-active {
-        margin-left: 300px; /* 随侧边栏移动*/
-    }
-    .chat-area {
-        flex: 1;
-        overflow-y: auto; 
-        padding: 20px;
-        transition: margin-left 0.3s; 
-        display: flex;
-        flex-direction: column;
-        gap: 20px; /* `gap` 属性设置 Flexbox 或 Grid 布局中项目之间的间隙。
-                        这里表示每条聊天消息之间有 10 像素的垂直间距。*/
-        position: relative;
-                    }
-    
-    /* 伪元素 */
-    .chat-area::before {
-        content: 'FLYINGPIG-Chatbox'; /* 你想显示的文字 */
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        font-size: 3em; /* 调整文字大小 */
-        font-weight: bold;
-        color: rgba(0, 0, 0, 0.06); /* 设置非常淡的颜色 */
-        z-index: 0; /* 确保在消息下方 */
-        pointer-events: none; /* 防止干扰鼠标事件 */
-        user-select: none; /* 防止被用户选中 */
-    }
-    .session-info {
-        font-size: 0.9em;  /* 设置字体大小。`em` 是一个相对单位，`0.9em` 表示字体大小是其父元素字体大小的 90%。*/
-        color: #666;
-    }
-    .input-area {
-        position: sticky;/* 元素在跨越特定阈值前为相对定位，之后为固定定位。
-                            配合下面的 `bottom: 0`，这意味着当用户向上滚动页面时，这个输入区域会像普通内容一样滚动，
-                            但当它滚动到视口底部时，就会"粘"在那里，不再向上滚动，始终保持在屏幕底部可见。*/
-        bottom: 0;
-        background: white;
-        padding: 15px 20px;
-        box-shadow: 0 -2px 10px rgba(0,0,0,0.05); /* 添加阴影效果。
-                                                     `0` 水平偏移。
-                                                     `-2px` 垂直偏移（向上）。
-                                                     `10px` 模糊半径。
-                                                     `rgba(0,0,0,0.05)` 颜色（非常淡的黑色）。
-                                                     这个阴影出现在输入区域的上方，将其与聊天区分开。*/
-        display: flex;
-        align-items: center;
-        gap: 10px; 
-    }
+}
 
-    /* 让输入框占据剩余空间 */
-    #messageInput { /* 选中 ID 为 `messageInput` 的元素（文本输入框）。ID 选择器用 `#` 开头。*/
-        flex: 1;
-        border: 1px solid #ccc;
-        border-radius: 5px;
-        padding: 10px;
-        font-size: 1em;
-        resize: none;  /* `resize` 属性允许用户调整元素的尺寸。`none` 表示禁止用户调整 `textarea` 的大小。*/
-    }
+.loading-dots {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px;
+}
 
-    /* 发送按钮样式 */
-    .input-area button {
-        padding: 10px 15px;
-        border: none;  /* 移除按钮的默认边框。*/
-        background-color: #007bff;
-        color: white;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 1em;
-    }
-    .input-area button:hover {
-        background-color: #0056b3; /* 这是一个伪类选择器。它选中当鼠标悬停在按钮上时的状态。*/
-    }
-    
-    /* 上传按钮样式 */
-    #uploadCsvButton {
-        background-color: #28bb4b; 
-        margin-right: 2px;
-        margin-left: 2px; /* 与发送按钮之间留一些间距 */
-    }
-    #uploadCsvButton:hover {
-        background-color: #218838;
-    }
-    #uploadCsvButton:disabled { /* 上传过程中禁用时的样式 */
-        background-color: #6c757d;
-        cursor: not-allowed;
-    }
-    .message {
-        max-width: 80%;
-        padding: 10px 15px;
-        border-radius: 10px;
-        word-break: break-word;
-        line-height: 1.4;
-        position: relative; /* 新增：确保消息在背景文字之上 */
-        z-index: 1;        /* 新增：确保消息在背景文字之上 */
-        background-color: white; /* 给消息一个不透明背景，防止背景文字透过来 */
-    }
+.loading-dots div {
+    width: 8px;
+    height: 8px;
+    margin: 0 3px;
+    background: #888;
+    border-radius: 50%;
+    animation: bouncing-loader 0.6s infinite alternate;
+}
 
-    /* 用户消息样式 */
-    .user-message {
-        background-color: #dcf8c6;
-        align-self: flex-end; /* 用户消息靠右 */
-    }
+.loading-dots div:nth-child(2) {
+    animation-delay: 0.2s;
+}
 
-    /* AI 消息样式 */
-    .ai-message {
-        background-color: #f1f0f0;
-        align-self: flex-start; /* AI 消息靠左 */
-        margin-left: 10px; /* 新增：为左侧菜单图标留出空间 */
-    }
-    
-    .preview-text {
-        font-size: 0.9em; /* 设置你想要的字体大小，例如 12px 或 0.8em */
-        color: #454545;
-        font-weight: bold;    
-        
-    }
-    .session-time {
-        font-size: 0.8em;
-        color: #888;
-    }
-
-    .sidebar-button {
-        padding: 10px 40px;
-        border: none;  
-        background-color: #007bff;
-        color: white;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 1em;
-    }
-    .sidebar-button:hover {
-        background-color: #0056b3;
-    }
-    /* 新增：覆盖层样式 ，用于隐藏主聊天界面*/
-    #authOverlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background-color: rgba(0, 0, 0, 0.6); /* 半透明黑色背景 */
-        display: flex; /* 使用 flex 居中 */
-        justify-content: center;
-        align-items: center;
-        z-index: 2000; /* 确保在最上层 */
-        display: none; /* 默认隐藏 */
-    }
-
-    #authOverlay.active {
-        display: flex; /* 需要显示时改为 flex */
-    }
-
-    /* 登录界面 */
-    .auth-container {
-        background-color: white;
-        padding: 30px 40px;
-        border-radius: 8px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        width: 350px;
-        text-align: center;
-    }
-
-    .auth-container h2 {
-        margin-top: 0;
-        margin-bottom: 20px;
-        color: #333;
-    }
-
-    .auth-container form div {
-        margin-bottom: 15px;
-        text-align: left;
-    }
-
-    .auth-container label {
-        display: block;
-        margin-bottom: 5px;
-        font-weight: bold;
-        color: #555;
-    }
-
-    .auth-container input[type="text"],
-    .auth-container input[type="password"] {
-        width: 100%;
-        padding: 10px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        box-sizing: border-box; /* 让 padding 不会撑大宽度 */
-    }
-
-    .auth-container button {
-        width: 100%;
-        padding: 12px;
-        background-color: #007bff;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 1em;
-        margin-top: 10px;
-        transition: background-color 0.2s;
-    }
-
-    .auth-container button:hover {
-        background-color: #0056b3;
-    }
-
-    .auth-switch-link {
-        display: block;
-        margin-top: 15px;
-        color: #007bff;
-        cursor: pointer;
-        text-decoration: none;
-        font-size: 0.9em;
-    }
-    .auth-switch-link:hover {
-        text-decoration: underline;
-    }
-
-    #registerForm {
-        display: none; /* 注册表单默认隐藏 */
-    }
-
-    .error-message {
-        color: red;
-        font-size: 0.9em;
-        margin-top: -10px;
-        margin-bottom: 10px;
-        text-align: left;
-        min-height: 1em; /* 避免没有错误时布局跳动 */
-    }
-
-
-    /* 新增：用户信息弹窗样式 */
-    #userInfoPopup {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%); /* 居中 */
-        background-color: white;
-        padding: 30px;
-        border-radius: 8px;
-        box-shadow: 0 5px 20px rgba(0,0,0,0.3);
-        z-index: 2001; /* 比遮罩层更高 */
-        display: none; /* 默认隐藏 */
-        width: 300px;
-    }
-    #userInfoPopup.active {
-        display: block;
-    }
-    #userInfoPopup h3 {
-        margin-top: 0;
-        text-align: center;
-        color: #333;
-    }
-    #userInfoContent {
-        margin-bottom: 20px;
-        text-align: center;
-        font-size: 1.1em;
-    }
-    #userInfoPopup button {
-        padding: 8px 15px;
-        cursor: pointer;
-    }
-     #logoutButton {
-        background-color: #dc3545;
-        color: white;
-        border: none;
-        border-radius: 4px;
-     }
-     #closePopupButton{
-         background-color: #6c757d;
-         color: white;
-         border: none;
-         border-radius: 4px;
-     }
-
-     /* 新增：用户信息弹窗按钮容器样式 */
-     .popup-button-container {
-         display: flex; /* 启用 Flexbox */
-         justify-content: center; /* 水平居中按钮组 */
-         gap: 20px; /* 设置按钮之间的间距 */
-         margin-top: 20px; /* 给按钮组和上方内容添加一些间距 */
-     }
-
-    /* 初始隐藏主内容和侧边栏，除非已登录 */
-    body:not(.logged-in) .container,
-    body:not(.logged-in) .sidebar,
-    body:not(.logged-in) .menu-icon {
-        display: none;
-    }
-
-    /* 用户信息头像区域 */
-    .user-avatar {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        background: #eee;
-        display: flex; /* 用于居中显示文字或图标 */
-        justify-content: center;
-        align-items: center;
-        font-weight: bold;
-        cursor: pointer; /* 添加可点击提示 */
-        /* 可以考虑用图片或 SVG 替换背景色 */
-    }
-    /* 设置 */
-    .setting-popup {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background-color: white;
-        padding: 25px 35px; /* 增加内边距 */
-        border-radius: 8px;
-        box-shadow: 0 6px 25px rgba(0,0,0,0.3); /* 稍微调整阴影 */
-        z-index: 2001; /* 确保在用户信息弹窗之上或同级 */
-        display: none; /* 默认隐藏 */
-        width: 400px; /* 设定宽度 */
-        min-height: 200px; /* 设定最小高度 */
-        text-align: center; /* 让标题和关闭按钮居中 */
-        transition: opacity 0.3s, transform 0.3s; /* 添加过渡效果 */
-        opacity: 0; /* 初始透明度为0，配合过渡 */
-        transform: translate(-50%, -45%) scale(0.95); /* 初始稍微向上偏并缩小一点，用于动画 */
-    }
-    
-    .setting-button-container {
-        display: flex; /* 启用 Flexbox */
-        justify-content: center; /* 水平居中按钮组 */
-        gap: 20px; /* 设置按钮之间的间距 */
-        margin-top: 20px; /* 给按钮组和上方内容添加一些间距 */
-    }
-    
-    .setting-popup button:hover {
-        background-color: #5a6268;
-    }
-    
-    /* 返回 */
-    #backToSettingsButton {
-        background-color: #007bff; /* 蓝色，与发送按钮一致 */
-        color: white;
-        border: none;
-        border-radius: 4px;
-        padding: 10px 20px; /* 与关闭按钮一致 */
-        cursor: pointer;
-        font-size: 0.9em;
-        transition: background-color 0.2s;
-    }
-    #backToSettingsButton:hover {
-        background-color: #0056b3;
-    }
-    .setting-popup.active {
-        display: block; /* 显示弹窗 */
-        opacity: 1; /* 完全不透明 */
-        transform: translate(-50%, -50%) scale(1); /* 恢复正常大小和位置 */
-    }
-    
-    /* 字体 */
-    .setting-popup h3 {
-        margin-top: 0;
-        margin-bottom: 25px; /* 标题和选项之间的距离 */
-        color: #333;
-    }
-     /* 设置选项所有的版式 */
-    #settingOptions {
-        margin-bottom: 20px; /* 选项和内容显示区之间的距离 */
-        text-align: left; /* 让选项文字左对齐 */
-        display:block;
-    }
-    /* 每一个设置按钮 */
-    .setting-option {
-        padding: 12px 15px; /* 选项内边距 */
-        margin-bottom: 10px; /* 选项之间的距离 */
-        border: 1px solid #eee;
-        border-radius: 5px;
-        cursor: pointer;
-        transition: background-color 0.2s; /* 悬停效果 */
-    }
-    
-    .setting-option:hover {
-        background-color: #f8f8f8; /* 鼠标悬停时的背景色 */
-    }
-    
-    #settingContentDisplay {
-        margin-top: 20px; /* 内容区与上方/选项的距离 */
-        margin-bottom: 20px; /* 内容区与关闭按钮的距离 */
-        padding: 15px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        min-height: 100px; /* 内容区最小高度 */
-        max-height: 300px; /* 内容区最大高度，超出则滚动 */
-        overflow-y: auto; /* 内容过多时显示滚动条 */
-        text-align: left; /* 内容左对齐 */
-        background-color: #f9f9f9; /* 给内容区一点背景色 */
-        white-space: pre-wrap; /* 保留文本中的空格和换行 */
-        word-wrap: break-word; /* 长单词换行 */
-        display: none; /* 初始隐藏内容区 */
-    }
-
-    .setting-popup button { /* 关闭按钮的样式 */
-        padding: 10px 20px;
-        background-color: #6c757d; /* 灰色 */
-        color: white;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 0.9em;
-        transition: background-color 0.2s;
-    }
-
-    .setting-popup button:hover {
-        background-color: #5a6268;
-    }
-    /* 用于诊断为什么整个页面超出限制 */
-    /* 整体页面内容高度超出了视口。不过要注意，这样做可能会隐藏掉本应可见但被“挤出”视口的内容（如果确实有内容被挤出的话） */
-    body{
-        overflow: hidden;
-    }
+.loading-dots div:nth-child(3) {
+    animation-delay: 0.4s;
+}
+/* --- 新增结束 --- */

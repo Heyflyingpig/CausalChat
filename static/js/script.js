@@ -699,8 +699,16 @@ function addMessage(sender, messageData, isLoading = false) {
         // --- 修改结束 ---
     }
     
-    messageElement.appendChild(avatar);
-    messageElement.appendChild(contentElement);
+    // --- 修改：根据发送者调整头像和内容顺序 ---
+    if (sender === 'user') {
+        messageElement.appendChild(contentElement);
+        messageElement.appendChild(avatar);
+    } else {
+        messageElement.appendChild(avatar);
+        messageElement.appendChild(contentElement);
+    }
+    // --- 修改结束 ---
+    
     chatArea.appendChild(messageElement);
     chatArea.scrollTop = chatArea.scrollHeight; // 自动滚动到底部
 }
