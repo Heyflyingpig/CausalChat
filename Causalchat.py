@@ -228,6 +228,30 @@ def initialize_database():
             """)
             logging.info("聊天记录表 'chat_messages' 已检查/创建。")
 
+            # --- 新增：检查并添加 ai_msg_structured 列 ---
+            try:
+                # 检查列是否存在
+                cursor.execute(f"""
+                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE table_schema = '{MYSQL_DATABASE}' 
+                    AND table_name = 'chat_messages' 
+                    AND column_name = 'ai_msg_structured'
+                """)
+                column_exists = cursor.fetchone()
+
+                if not column_exists:
+                    cursor.execute("""
+                        ALTER TABLE chat_messages
+                        ADD COLUMN ai_msg_structured JSON DEFAULT NULL AFTER ai_msg
+                    """)
+                    conn.commit() # 提交列添加操作
+                    logging.info("列 'ai_msg_structured' 已成功添加到 'chat_messages' 表。")
+                else:
+                    logging.info("列 'ai_msg_structured' 已存在于 'chat_messages' 表。")
+            except mysql.connector.Error as alter_err:
+                logging.error(f"向 'chat_messages' 表添加列时发生错误: {alter_err}")
+            # --- 列添加结束 ---
+
             # --- 修改：处理 chat_messages 表索引 (避免 IF EXISTS / IF NOT EXISTS) ---
             chat_messages_indices_to_drop = [
                 "idx_chat_messages_session_userid_time",
@@ -708,29 +732,36 @@ async def ai_call(text, username):
 
 
 ## 保存历史文件 ( 添加 user_id 参数和列)
-def save_chat(user_id, user_msg, ai_msg): # 修改：username -> user_id
+def save_chat(user_id, user_msg, ai_response): # 修改：username -> user_id, ai_msg -> ai_response
     global current_session # 需要访问全局会话ID
     timestamp_dt = datetime.now()
 
-    # --- 修改：处理结构化和非结构化的AI回复 ---
-    # 如果 ai_msg 是一个字典 (我们的新格式), 只保存总结部分
-    # 否则 (旧格式或纯文本回复), 直接保存
-    if isinstance(ai_msg, dict) and 'summary' in ai_msg:
-        ai_msg_to_save = ai_msg['summary']
-    elif isinstance(ai_msg, str):
-        ai_msg_to_save = ai_msg
+    ai_msg_to_save = None
+    ai_structured_to_save = None
+
+    if isinstance(ai_response, dict):
+        # 无论如何都保存摘要
+        ai_msg_to_save = ai_response.get('summary', json.dumps(ai_response, ensure_ascii=False))
+
+        # 只有当它是需要特殊渲染的类型时，才保存结构化数据
+        if ai_response.get('type') == 'causal_graph':
+            # 将 dict 转换为 JSON 字符串以便存入数据库
+            ai_structured_to_save = json.dumps(ai_response, ensure_ascii=False)
+    
+    elif isinstance(ai_response, str):
+        ai_msg_to_save = ai_response
     else:
         # 兜底，以防意外格式
-        ai_msg_to_save = json.dumps(ai_msg, ensure_ascii=False)
-    # ---------------------------------------------
+        ai_msg_to_save = json.dumps(ai_response, ensure_ascii=False)
+
 
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO chat_messages (session_id, user_id, user_msg, ai_msg, timestamp)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (current_session, user_id, user_msg, ai_msg_to_save, timestamp_dt))
+                INSERT INTO chat_messages (session_id, user_id, user_msg, ai_msg, ai_msg_structured, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (current_session, user_id, user_msg, ai_msg_to_save, ai_structured_to_save, timestamp_dt))
             conn.commit()
     except mysql.connector.Error as e:
         logging.error(f"保存聊天记录到数据库时出错 (用户 ID: {user_id}, 会话: {current_session}): {e}")
@@ -851,7 +882,7 @@ def load_session_content():
             cursor = conn.cursor(dictionary=True) # <-- 使用字典游标
             # %s 是 MySQL 的参数占位符
             cursor.execute("""
-                SELECT user_msg, ai_msg FROM chat_messages
+                SELECT user_msg, ai_msg, ai_msg_structured FROM chat_messages
                 WHERE session_id = %s AND user_id = %s 
                 ORDER BY timestamp ASC
             """, (session_id, user_id)) # 修改：传递 user_id
@@ -861,13 +892,24 @@ def load_session_content():
         if chat_rows:
             session_found_for_user = True
             for row in chat_rows:
-                # 根据存储的逻辑，一条记录可能同时有 user_msg 和 ai_msg (如果AI是紧接着用户的回复)
-                # 或者某一条只有 user_msg (用户刚发送，AI还没回)
-                # 或者某一条只有 ai_msg (如果允许AI主动发起，但目前设计不是这样)
-                # 当前端 addMessage 的逻辑是分开处理 user 和 ai，所以我们也分开添加
                 if row["user_msg"]:
                     messages.append({"sender": "user", "text": row["user_msg"]})
-                if row["ai_msg"]:
+                
+                # 优先使用结构化数据
+                if row["ai_msg_structured"]:
+                    # MySQL/MariaDB 的 JSON 类型通过 Connector/Python 返回的可能是字符串或已解析的 dict/list
+                    # 我们需要处理这两种情况
+                    try:
+                        # 如果是字符串，则解析；如果已经是 dict，直接使用
+                        structured_content = json.loads(row["ai_msg_structured"]) if isinstance(row["ai_msg_structured"], (str, bytes, bytearray)) else row["ai_msg_structured"]
+                        messages.append({"sender": "ai", "text": structured_content})
+                    except (json.JSONDecodeError, TypeError):
+                        # 如果解析失败，记录警告并回退到纯文本摘要
+                        logging.warning(f"无法解析会话 {session_id} 中的 ai_msg_structured，回退到 ai_msg。内容: {row['ai_msg_structured']}")
+                        if row["ai_msg"]:
+                             messages.append({"sender": "ai", "text": row["ai_msg"]})
+                elif row["ai_msg"]:
+                    # 如果没有结构化数据，使用纯文本摘要
                     messages.append({"sender": "ai", "text": row["ai_msg"]})
         
         # 后端CSV版本中，如果session_id存在但不属于该用户，会继续遍历完再判断

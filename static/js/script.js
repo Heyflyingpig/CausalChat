@@ -305,75 +305,46 @@ document.getElementById('messageInput').addEventListener('keypress', (e) => {
 });
 
 async function sendMessage() {
-    const input = document.getElementById('messageInput');
-    const message = input.value.trim();
+    const messageInput = document.getElementById('messageInput');
+    const message = messageInput.value.trim();
+    if (!message || !currentUsername) return;
 
-    if (!message) return;
-    if (!currentUsername) {
-        showError("请先登录！");
-        return;
-    }
-
-    // 1. Add user's message to the chat
     addMessage('user', message);
-    input.value = ''; // Clear the input field
+    messageInput.value = '';
+    messageInput.style.height = 'auto'; // Reset height
 
-    // 2. Add a loading placeholder for the AI response and get a reference to its content element
-    const aiMessageContent = addMessage('ai', '', true);
+    // Add a temporary loading message
+    addMessage('ai', '', true);
 
     try {
-        const res = await fetch('/api/send', {
+        const response = await fetch('/api/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: message, username: currentUsername })
         });
-
-        // Clear the loading state
-        aiMessageContent.innerHTML = '';
-        aiMessageContent.classList.remove('loading');
-
-        if (!res.ok) {
-            const errorData = await res.json().catch(() => ({ error: '无法解析服务器错误响应' }));
-            throw new Error(errorData.error || '服务器返回了一个错误');
-        }
-
-        const data = await res.json();
         
-        // Process the successful response
+        // Remove the loading message before adding the actual response
+        const loadingElement = document.querySelector('.message.ai-message .loading-dots');
+        if (loadingElement) {
+            loadingElement.closest('.message.ai-message').remove();
+        }
+
+        const data = await response.json();
+
         if (data.success) {
-            const response = data.response;
-
-            if (response.type === 'causal_graph' && response.data) {
-                // Handle causal graph response
-                const summaryDiv = document.createElement('div');
-                summaryDiv.innerHTML = marked.parse(response.summary || '已生成因果图，见下：');
-                aiMessageContent.appendChild(summaryDiv);
-                
-                const graphContainerId = `graph-${Date.now()}`;
-                const graphDiv = document.createElement('div');
-                graphDiv.id = graphContainerId;
-                graphDiv.className = 'causal-graph-container';
-                aiMessageContent.appendChild(graphDiv);
-
-                renderCausalGraph(graphContainerId, response.data);
-
-            } else {
-                // Handle plain text response
-                aiMessageContent.innerHTML = marked.parse(response.summary || '抱歉，我无法回答这个问题。');
-            }
+            // The new addMessage function can handle both structured and plain text responses
+            addMessage('ai', data.response);
         } else {
-            aiMessageContent.textContent = `错误: ${data.error || '未知错误'}`;
+            showError(data.error || '从服务器获取响应失败。');
         }
-
     } catch (error) {
-        console.error('发送消息失败:', error);
-        if (aiMessageContent) {
-            aiMessageContent.innerHTML = ''; // Ensure loading content is gone
-            aiMessageContent.classList.remove('loading');
-            aiMessageContent.textContent = `请求失败: ${error.message}`;
+        // Also remove loading message on error
+        const loadingElement = document.querySelector('.message.ai-message .loading-dots');
+        if (loadingElement) {
+            loadingElement.closest('.message.ai-message').remove();
         }
-    } finally {
-        chatArea.scrollTop = chatArea.scrollHeight;
+        console.error("发送消息时出错:", error);
+        showError('发送消息时发生网络错误。');
     }
 }
 
@@ -595,10 +566,17 @@ async function handleCsvFileSelect(event) {
 function renderCausalGraph(containerId, graphData) {
     const container = document.getElementById(containerId);
     if (!container) {
-        console.error(`图表容器 #${containerId} 未找到。`);
+        console.error(`无法找到ID为 "${containerId}" 的容器来渲染图表。`);
+        return;
+    }
+     // 确保 graphData 是预期的格式
+    if (!graphData || !Array.isArray(graphData.nodes) || !Array.isArray(graphData.edges)) {
+        console.error('无效的图表数据格式:', graphData);
+        container.textContent = '错误：无法加载图表，数据格式不正确。';
         return;
     }
 
+    // 将 causal-learn 格式的节点和边转换为 vis.js 格式
     const nodes = new vis.DataSet(graphData.nodes);
     const edges = new vis.DataSet(graphData.edges);
 
@@ -606,83 +584,132 @@ function renderCausalGraph(containerId, graphData) {
         nodes: nodes,
         edges: edges,
     };
-
     const options = {
         layout: {
             hierarchical: {
-                enabled: false,
+                enabled: false, // 可以设为 true 尝试层次布局
             },
         },
-        physics: {
-            enabled: true,
-            solver: 'forceAtlas2Based',
-            forceAtlas2Based: {
-                gravitationalConstant: -50,
-                centralGravity: 0.01,
-                springConstant: 0.08,
-                springLength: 100,
-                damping: 0.4,
-                avoidOverlap: 0.5
-            }
+        edges: {
+            arrows: {
+                to: { enabled: true, scaleFactor: 1, type: 'arrow' }
+            },
+            color: '#848484',
+            font: {
+                size: 12,
+            },
+            smooth: {
+                enabled: true,
+                type: 'dynamic', // 'dynamic' 对于非层次结构通常效果更好
+            },
         },
         nodes: {
-            shape: 'box',
-            size: 16,
+            shape: 'box', // 节点形状
+            size: 30,
             font: {
                 size: 14,
                 color: '#333'
             },
-            borderWidth: 1,
-            shadow: true,
-        },
-        edges: {
-            width: 2,
-            shadow: true,
-            smooth: {
-                enabled: true,
-                type: 'dynamic'
-            }
+            borderWidth: 2,
         },
         interaction: {
             dragNodes: true,
             dragView: true,
             zoomView: true,
         },
+        physics: {
+            enabled: true, // 启用物理引擎以自动布局
+            barnesHut: {
+                gravitationalConstant: -2000,
+                centralGravity: 0.3,
+                springLength: 95,
+                springConstant: 0.04,
+                damping: 0.09,
+                avoidOverlap: 0.1
+            },
+            solver: 'barnesHut',
+            stabilization: {
+                iterations: 1000,
+            },
+        },
     };
 
-    new vis.Network(container, data, options);
+    try {
+        const network = new vis.Network(container, data, options);
+        // 稳定后关闭物理引擎，以节省CPU
+        network.on("stabilizationIterationsDone", function () {
+            network.setOptions( { physics: false } );
+        });
+    } catch (err) {
+        console.error("创建 vis.js 网络时出错:", err);
+        container.textContent = "渲染图表时发生错误。";
+    }
 }
 
-function addMessage(sender, text, isLoading = false) {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${sender}-message`;
+function addMessage(sender, messageData, isLoading = false) {
+    const messageElement = document.createElement('div');
+    messageElement.classList.add('message', `${sender}-message`);
 
-    // Create the main content block
-    const contentDiv = document.createElement('div');
-    contentDiv.className = 'message-content';
-
-    if (isLoading) {
-        contentDiv.classList.add('loading');
-        // Add three bouncing dots for loading animation
-        for (let i = 0; i < 3; i++) {
-            const dot = document.createElement('span');
-            dot.className = 'loading-dot';
-            contentDiv.appendChild(dot);
-        }
+    const avatar = document.createElement('div');
+    avatar.classList.add('avatar');
+    // 根据发送者设置头像内容或图片
+    if (sender === 'user') {
+        avatar.textContent = currentUsername ? currentUsername.charAt(0).toUpperCase() : 'U';
     } else {
-        if (sender === 'user') {
-            // For user messages, just use plain text to prevent XSS
-            contentDiv.textContent = text;
-        } else {
-            // For AI messages, parse Markdown
-            contentDiv.innerHTML = marked.parse(text);
-        }
+        avatar.textContent = 'AI';
     }
 
-    messageDiv.appendChild(contentDiv);
-    chatArea.appendChild(messageDiv);
-    chatArea.scrollTop = chatArea.scrollHeight;
+    const contentElement = document.createElement('div');
+    contentElement.classList.add('content');
 
-    // Return the content element so it can be updated (e.g., from loading to final content)
-    return contentDiv;
+    if (isLoading) {
+        const loadingDots = document.createElement('div');
+        loadingDots.classList.add('loading-dots');
+        for (let i = 0; i < 3; i++) {
+            loadingDots.appendChild(document.createElement('div'));
+        }
+        contentElement.appendChild(loadingDots);
+    } else {
+        // --- 核心修改：处理不同类型的 messageData ---
+        if (sender === 'ai' && typeof messageData === 'object' && messageData !== null) {
+            // 处理AI的结构化响应
+            if (messageData.type === 'causal_graph' && messageData.data) {
+                // 1. 添加总结文本（如果存在）
+                if (messageData.summary) {
+                    const summaryDiv = document.createElement('div');
+                    summaryDiv.innerHTML = marked.parse(messageData.summary);
+                    contentElement.appendChild(summaryDiv);
+                }
+
+                // 2. 创建并渲染因果图
+                const graphContainerId = `graph-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                const graphContainer = document.createElement('div');
+                graphContainer.id = graphContainerId;
+                graphContainer.classList.add('causal-graph-container'); // 用于样式
+                contentElement.appendChild(graphContainer);
+
+                // 使用 setTimeout 确保元素已添加到 DOM 中
+                // vis.js 需要一个已挂载的容器来进行初始化
+                setTimeout(() => {
+                    renderCausalGraph(graphContainerId, messageData.data);
+                }, 100);
+
+            } else if (messageData.summary) {
+                // 对于其他类型的结构化响应（例如只有 'type': 'text'），只显示总结
+                contentElement.innerHTML = marked.parse(messageData.summary);
+            } else {
+                // 如果对象无法识别，则作为字符串显示以供调试
+                contentElement.textContent = JSON.stringify(messageData, null, 2);
+            }
+        } else {
+            // 对于用户消息（总是字符串）和旧的纯文本AI消息
+            contentElement.innerHTML = marked.parse(messageData.toString());
+        }
+        // --- 修改结束 ---
+    }
+    
+    messageElement.appendChild(avatar);
+    messageElement.appendChild(contentElement);
+    chatArea.appendChild(messageElement);
+    chatArea.scrollTop = chatArea.scrollHeight; // 自动滚动到底部
 }
