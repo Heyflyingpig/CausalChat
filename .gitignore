@@ -177,8 +177,9 @@ cython_debug/
 secrets.json
 config.json
 
-# MCP demo
-MCPdemo/
+#  demo
+杂项/
+项目规划/
 
 # test
 test.py
