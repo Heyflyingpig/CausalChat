@@ -131,6 +131,7 @@ python Run_causal.py
 ├── Causalchat.py         # Flask 主应用，处理 HTTP 请求、用户认证、MCP 交互
 ├── Run_causal.py         # pywebview 前端启动器
 ├── requirements.txt      # Python 依赖
+├── database_init.py      # 数据库初始化(需要自行运行)
 ├── secrets.json.template # 配置模板 (需自行创建 secrets.json)
 ├── causal/               # 因果推断算法模块
 │   └── causalachieve.py
@@ -179,3 +180,6 @@ python Run_causal.py
 - 增加应用端多用户并行登录逻辑
 - 增加前端动画效果，加载动画
 ---
+2025.6.14
+- 分离数据库，现在不需要每次都加载数据库了，是系统更加健壮
+- 
