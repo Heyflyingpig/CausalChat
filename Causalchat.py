@@ -191,176 +191,83 @@ def get_db_connection():
             logging.error(f"MySQL 连接错误: {err}")
         raise # 重新抛出异常，让调用者知道连接失败
 
-def initialize_database():
-    """初始化 MySQL 数据库和表。如果数据库不存在，则尝试创建它。"""
+def check_database_readiness():
+    """检查数据库是否已准备就绪，包括所需的表和基本连接性。
+    这个函数不会创建或修改数据库结构，只是检查现有配置是否正确。
+    如果数据库未初始化，请先运行 database_init.py 脚本。
+    """
     try:
-        # 1. 尝试连接到 MySQL 服务器（不指定数据库，以便创建数据库）
-        logging.info(f"尝试连接到 MySQL 服务器: host={MYSQL_HOST}, user={MYSQL_USER}")
-        conn_server = mysql.connector.connect(
-            host=MYSQL_HOST,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD
-        )
-        cursor_server = conn_server.cursor()
-        logging.info(f"尝试创建数据库 '{MYSQL_DATABASE}' (如果不存在)...")
-        # 使用反引号处理可能包含特殊字符的数据库名，并指定字符集
-        cursor_server.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_DATABASE}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-        cursor_server.close()
-        conn_server.close()
-        logging.info(f"数据库 '{MYSQL_DATABASE}' 已确保存在。")
-
-        # 2. 现在连接到特定的数据库并创建表
-        with get_db_connection() as conn: # 这会连接到 MYSQL_DATABASE
+        logging.info(f"检查数据库连接和表结构就绪状态...")
+        
+        with get_db_connection() as conn:
             cursor = conn.cursor()
-            logging.info(f"开始初始化数据库表于 '{MYSQL_DATABASE}'")
-            # 创建用户表
-            # AUTO_INCREMENT 是 MySQL 的自增关键字
-            # VARCHAR(255) 通常用于存储哈希或短文本
-            # ENGINE=InnoDB 和 CHARSET/COLLATE 是推荐的 MySQL 设置
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    username VARCHAR(255) UNIQUE NOT NULL,
-                    password_hash VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            
+            # 检查所需的表是否存在
+            required_tables = ['users', 'chat_messages', 'uploaded_files']
+            cursor.execute(f"""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = '{MYSQL_DATABASE}' 
+                AND table_name IN ('users', 'chat_messages', 'uploaded_files')
             """)
-            logging.info("用户表 'users' 已检查/创建。")
-
-            # 创建聊天记录表
-            # TEXT 类型用于存储较长的消息
-            # FOREIGN KEY 添加 ON DELETE CASCADE，当用户被删除时，其消息也会被删除
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS chat_messages (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    session_id VARCHAR(255) NOT NULL,
-                    user_id INT NOT NULL,
-                    user_msg TEXT,
-                    ai_msg TEXT,
-                    timestamp TIMESTAMP NOT NULL,
-                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            existing_tables = [row[0] for row in cursor.fetchall()]
+            
+            missing_tables = set(required_tables) - set(existing_tables)
+            if missing_tables:
+                error_msg = f"数据库表缺失: {list(missing_tables)}。请先运行 'python database_init.py' 初始化数据库。"
+                logging.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # 检查 chat_messages 表是否有 ai_msg_structured 列（用于向后兼容性检查）
+            cursor.execute(f"""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = '{MYSQL_DATABASE}' 
+                AND table_name = 'chat_messages' 
+                AND column_name = 'ai_msg_structured'
             """)
-            logging.info("聊天记录表 'chat_messages' 已检查/创建。")
-
-            # --- 新增：检查并添加 ai_msg_structured 列 ---
-            try:
-                # 检查列是否存在
-                cursor.execute(f"""
-                    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE table_schema = '{MYSQL_DATABASE}' 
-                    AND table_name = 'chat_messages' 
-                    AND column_name = 'ai_msg_structured'
-                """)
-                column_exists = cursor.fetchone()
-
-                if not column_exists:
-                    cursor.execute("""
-                        ALTER TABLE chat_messages
-                        ADD COLUMN ai_msg_structured JSON DEFAULT NULL AFTER ai_msg
-                    """)
-                    conn.commit() # 提交列添加操作
-                    logging.info("列 'ai_msg_structured' 已成功添加到 'chat_messages' 表。")
-                else:
-                    logging.info("列 'ai_msg_structured' 已存在于 'chat_messages' 表。")
-            except mysql.connector.Error as alter_err:
-                logging.error(f"向 'chat_messages' 表添加列时发生错误: {alter_err}")
-            # --- 列添加结束 ---
-
-            # --- 修改：处理 chat_messages 表索引 (避免 IF EXISTS / IF NOT EXISTS) ---
-            chat_messages_indices_to_drop = [
-                "idx_chat_messages_session_userid_time",
-                "idx_chat_messages_userid_session_time"
-            ]
-            for index_name in chat_messages_indices_to_drop:
-                try:
-                    cursor.execute(f"DROP INDEX {index_name} ON chat_messages")
-                    logging.info(f"已删除 chat_messages 表上的旧索引 (如果存在): {index_name}")
-                except mysql.connector.Error as err_drop_idx:
-                    if err_drop_idx.errno == errorcode.ER_CANT_DROP_FIELD_OR_KEY: # 1091
-                        logging.info(f"尝试删除 chat_messages 索引 '{index_name}' 时，索引不存在。")
-                    else:
-                        logging.warning(f"删除 chat_messages 索引 '{index_name}' 时出现非预期的错误: {err_drop_idx}")
+            structured_column_exists = cursor.fetchone()
             
-            try:
-                cursor.execute("""
-                    CREATE INDEX idx_chat_messages_session_userid_time 
-                    ON chat_messages (session_id, user_id, timestamp)
-                """)
-                logging.info("已创建索引 idx_chat_messages_session_userid_time")
-            except mysql.connector.Error as err_create_idx:
-                if err_create_idx.errno == errorcode.ER_DUP_KEYNAME: # 1061: Duplicate key name
-                    logging.info("索引 idx_chat_messages_session_userid_time 已存在。")
-                else:
-                    logging.warning(f"创建索引 idx_chat_messages_session_userid_time 时发生错误: {err_create_idx}")
+            if not structured_column_exists:
+                logging.warning("检测到旧版本数据库结构，缺少 'ai_msg_structured' 列。建议重新运行 database_init.py 升级数据库结构。")
             
-            try:
-                cursor.execute("""
-                    CREATE INDEX idx_chat_messages_userid_session_time 
-                    ON chat_messages (user_id, session_id, timestamp DESC)
-                """)
-                logging.info("已创建索引 idx_chat_messages_userid_session_time")
-            except mysql.connector.Error as err_create_idx:
-                if err_create_idx.errno == errorcode.ER_DUP_KEYNAME: # 1061
-                    logging.info("索引 idx_chat_messages_userid_session_time 已存在。")
-                else:
-                    logging.warning(f"创建索引 idx_chat_messages_userid_session_time 时发生错误: {err_create_idx}")
-            logging.info("聊天记录表索引已检查/处理。")
-
-            # 创建上传文件表
-            # LONGBLOB 用于存储可能较大的文件内容
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS uploaded_files (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    user_id INT NOT NULL,
-                    filename VARCHAR(255) NOT NULL,
-                    mime_type VARCHAR(100) NOT NULL,
-                    file_content LONGBLOB NOT NULL,
-                    upload_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            logging.info("上传文件表 'uploaded_files' 已检查/创建。")
+            # 简单的连接性测试
+            cursor.execute("SELECT 1")
+            test_result = cursor.fetchone()
+            if not test_result or test_result[0] != 1:
+                raise RuntimeError("数据库连接测试失败")
             
-            # --- 修改：处理 uploaded_files 表索引 (避免 IF EXISTS / IF NOT EXISTS) ---
-            uploaded_files_index_to_drop = "idx_uploaded_files_user_id"
-            try:
-                cursor.execute(f"DROP INDEX {uploaded_files_index_to_drop} ON uploaded_files")
-                logging.info(f"已删除 uploaded_files 表上的旧索引 (如果存在): {uploaded_files_index_to_drop}")
-            except mysql.connector.Error as err_drop_idx_files:
-                if err_drop_idx_files.errno == errorcode.ER_CANT_DROP_FIELD_OR_KEY: # 1091
-                    logging.info(f"尝试删除 uploaded_files 索引 '{uploaded_files_index_to_drop}' 时，索引不存在。")
-                else:
-                    logging.warning(f"删除 uploaded_files 索引 '{uploaded_files_index_to_drop}' 时出现非预期的错误: {err_drop_idx_files}")
-
-            try:
-                cursor.execute("""
-                    CREATE INDEX idx_uploaded_files_user_id 
-                    ON uploaded_files (user_id)
-                """)
-                logging.info("已创建索引 idx_uploaded_files_user_id")
-            except mysql.connector.Error as err_create_idx:
-                if err_create_idx.errno == errorcode.ER_DUP_KEYNAME: # 1061
-                    logging.info("索引 idx_uploaded_files_user_id 已存在。")
-                else:
-                    logging.warning(f"创建索引 idx_uploaded_files_user_id 时发生错误: {err_create_idx}")
-            logging.info("上传文件表索引已检查/处理。")
+            logging.info(f"数据库 '{MYSQL_DATABASE}' 就绪检查通过。所有必需表已存在。")
+            return True
             
-            conn.commit()
-            logging.info(f"数据库表在 '{MYSQL_DATABASE}' 中已成功初始化/验证。")
-
     except mysql.connector.Error as e:
-        logging.error(f"MySQL 数据库初始化失败: {e}")
-        if 'CREATE DATABASE' in str(e) and (e.errno == errorcode.ER_DBACCESS_DENIED_ERROR or e.errno == errorcode.ER_ACCESS_DENIED_ERROR):
-            logging.error(f"创建数据库 '{MYSQL_DATABASE}' 失败。请检查 MySQL 用户 '{MYSQL_USER}' 是否有 CREATE DATABASE 权限，或者手动创建数据库。")
-        elif 'CREATE TABLE' in str(e) and (e.errno == errorcode.ER_TABLEACCESS_DENIED_ERROR or e.errno == errorcode.ER_ACCESS_DENIED_ERROR):
-             logging.error(f"在数据库 '{MYSQL_DATABASE}' 中创建表失败。请检查 MySQL 用户 '{MYSQL_USER}' 是否有对该数据库的 CREATE TABLE 权限。")
-        raise 
-    except Exception as e: # Python 的 AttributeError 等也会被这里捕获
-        logging.error(f"数据库初始化过程中发生未知错误: {e}")
+        if e.errno == errorcode.ER_BAD_DB_ERROR:
+            error_msg = f"数据库 '{MYSQL_DATABASE}' 不存在。请先运行 'python database_init.py' 创建和初始化数据库。"
+            logging.error(error_msg)
+            raise RuntimeError(error_msg)
+        elif e.errno == errorcode.ER_ACCESS_DENIED_ERROR:
+            error_msg = f"无法访问数据库。请检查用户 '{MYSQL_USER}' 的权限配置。"
+            logging.error(error_msg)
+            raise RuntimeError(error_msg)
+        else:
+            logging.error(f"数据库就绪性检查失败: {e}")
+            raise
+    except Exception as e:
+        logging.error(f"数据库就绪性检查过程中发生未知错误: {e}")
         raise
 
-initialize_database() # 程序启动时检查并初始化数据库
+# --- 修改：在应用启动时进行数据库就绪性检查而不是初始化 ---
+try:
+    check_database_readiness()
+except RuntimeError as e:
+    logging.critical(f"数据库未就绪，应用无法启动: {e}")
+    print(f"\n❌ 数据库错误: {e}")
+    print("请先运行以下命令初始化数据库:")
+    print("python database_init.py")
+    sys.exit(1)
+except Exception as e:
+    logging.critical(f"数据库检查失败，应用无法启动: {e}")
+    print(f"\n❌ 数据库检查失败: {e}")
+    sys.exit(1)
 
 # 全局状态
 
@@ -686,12 +593,15 @@ async def ai_call(text, user_id, username):
 
     # ---- 使用已建立的会话 ----
     messages = [
-        {"role": "system", "content": "你是一个有用的工程师助手，可以使用工具来获取额外信息。你的主要任务是分析工具返回的JSON数据，并以清晰、简洁的自然语言向用户总结关键发现。不要在你的回答中逐字重复整个JSON数据。请根据上下文进行回复。"},
+        {"role": "system", "content": "你是一个有用的工程师助手，可以使用工具来获取额外信息。"
+        "你的主要任务是分析工具返回的JSON数据，并以详细的自然语言（根据用户给你的语言风格）向用户总结关键发现。"
+        "现在有一下几个要求：1.不要在你的回答中逐字重复整个JSON数据。请根据上下文进行回复。2. 请使用Markdown格式（例如，使用项目符号、加粗、表格等）来组织你的回答 3. 回答需要依照因果推断相关的知识和术语进行回答"},
     ]
     messages.extend(history_messages)
     messages.append({"role": "user", "content": text})
 
     # 第一次调用
+    # 这里可选择是否调用MCP，未来可添加功能
     logging.info(f"ai_call: 首次调用 LLM，包含 {len(history_messages)} 条历史消息...")
     response = client.chat.completions.create(
         model=current_model,
@@ -806,19 +716,7 @@ def get_sessions():
     
     user_id = session['user_id']
     username = session['username']
-    # ------------------------------------
-    
-    # username = request.args.get('user') # **移除：** 不再从查询参数获取用户名
-    # if not username:
-    #     logging.warning("获取会话列表请求缺少用户名")
-    #     return jsonify({"error": "需要提供用户名"}), 400
 
-    # user_data = find_user(username) # 获取用户数据
-    # if not user_data:
-    #     logging.warning(f"用户 {username} 请求会话列表，但用户不存在")
-    #     return jsonify({"error": "用户不存在"}), 404 # 404 Not Found 似乎更合适
-    
-    # user_id = user_data['id'] # 提取 user_id
 
     logging.info(f"用户 {username} (ID: {user_id}) 请求会话列表")
     sessions = {}
