@@ -138,7 +138,7 @@ python Run_causal.py
 ├── Run_causal.py         # pywebview 前端启动器
 ├── requirements.txt      # Python 依赖
 ├── database_init.py      # 数据库初始化(需要自行运行)
-├── secrets.json.template # 配置模板 (需自行创建 secrets.json)
+├── secrets.json.         # 配置模板 (需自行创建 secrets.json)
 ├── causal/               # 因果推断算法模块
 │   └── causalachieve.py
 ├── CausalChatMCP/        # MCP 工具服务端
@@ -196,3 +196,10 @@ python Run_causal.py
 - 当用户同时上传多个文件，MCP无法响应 
   - 目前支持文件的检查逻辑，可以更新相同的文件
 - 修改了前端样式
+
+---
+2025.6.15
+- 结构更改：数据库结构更改，增加归档和分区功能，为以后的数据库处理打下基础
+- [数据库更新内容](Document/Database_NOTES.md)
+- 前端结构：修改前端样式匹配新版数据库
+- 后端结构：修改后端样式匹配新版数据库
