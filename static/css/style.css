@@ -145,13 +145,13 @@
     }
 
     /* 让输入框占据剩余空间 */
-    #messageInput { /* 选中 ID 为 `messageInput` 的元素（文本输入框）。ID 选择器用 `#` 开头。*/
+    #userInput { /* 修正：选中 ID 为 `userInput` 的元素（文本输入框）。*/
         flex: 1;
         border: 1px solid #ccc;
         border-radius: 5px;
         padding: 10px;
         font-size: 1em;
-        resize: none;  /* `resize` 属性允许用户调整元素的尺寸。`none` 表示禁止用户调整 `textarea` 的大小。*/
+        resize: none;  /* `resize` 属性允许用户调整 `textarea` 的大小。`none` 表示禁止用户调整 `textarea` 的大小。*/
     }
 
     /* 发送按钮样式 */

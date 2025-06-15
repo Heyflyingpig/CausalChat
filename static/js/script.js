@@ -17,6 +17,8 @@ const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上
 const chatArea = document.getElementById('chatArea');
 // --- 新增：全局变量存储当前会话的用户名 ---
 let currentUsername = null;
+let currentSessionId = null; // <--- 新增：全局变量跟踪当前会话ID
+let chatEventListenersAttached = false; // 新增：跟踪事件监听器是否已附加
 
 // 切换登录和注册表单
 function toggleAuthForms() {
@@ -116,8 +118,13 @@ async function handleLogin() {
             currentUsername = data.username; // **修改**: 设置全局变量
             document.body.classList.add('logged-in'); // 添加标记类
             authOverlay.classList.remove('active'); // 隐藏登录/注册层
+            
+            // 登录成功后，绑定聊天界面的事件
+            setupChatEventListeners();
+
             updateUserInfo(); // 更新用户信息显示
-            loadHistory(); // 登录成功后加载历史记录
+            loadHistory(); // --- 新增：先加载历史记录
+            newChat(); // --- 修改：然后准备一个新对话界面
              // 清空登录表单
             usernameInput.value = '';
             passwordInput.value = '';
@@ -147,6 +154,7 @@ async function handleLogout() {
         if (data.success) {
             console.log("后端登出成功");
             currentUsername = null; // **修改**: 清除全局变量
+            chatEventListenersAttached = false; // --- 新增：重置监听器标志 ---
             document.body.classList.remove('logged-in'); // 移除标记类
             authOverlay.classList.add('active'); // 显示登录/注册层
             loginForm.style.display = 'block'; // 确保显示的是登录表单
@@ -177,6 +185,10 @@ async function checkLoginStatus() {
             currentUsername = data.username; // **修改**: 设置全局变量
             document.body.classList.add('logged-in');
             authOverlay.classList.remove('active');
+            
+            // 状态检查通过后，绑定聊天界面的事件
+            setupChatEventListeners();
+
             updateUserInfo(); // 更新用户信息显示 (稍后修改此函数)
             loadHistory(); // 加载历史记录 (稍后修改此函数)
         } else {
@@ -287,6 +299,74 @@ async function handleSettingOption(optionId) {
     }
 }
 
+function setupGlobalEventListeners() {
+    // 登录/注册表单的切换
+    document.getElementById('switchToRegister').addEventListener('click', (e) => {
+        e.preventDefault();
+        toggleAuthForms();
+    });
+    document.getElementById('switchToLogin').addEventListener('click', (e) => {
+        e.preventDefault();
+        toggleAuthForms();
+    });
+
+    // 登录和注册按钮
+    document.getElementById('loginButton').addEventListener('click', handleLogin);
+    document.getElementById('registerButton').addEventListener('click', handleRegister);
+    
+    // 用户信息弹窗
+    document.getElementById('logoutButton').addEventListener('click', handleLogout);
+    document.getElementById('closePopupButton').addEventListener('click', closeUserInfoPopup);
+    
+    // 设置弹窗
+    document.getElementById('hideSettingPopupButton').addEventListener('click', hideSettingPopup);
+    document.getElementById('backToSettingsButton').addEventListener('click', showSettingOptions);
+    
+    // 设置选项
+    document.querySelectorAll('.setting-option').forEach(option => {
+        option.addEventListener('click', (e) => {
+            const optionId = e.currentTarget.getAttribute('data-option');
+            handleSettingOption(optionId);
+        });
+    });
+}
+
+function setupChatEventListeners() {
+    // --- 新增：防止重复绑定 ---
+    if (chatEventListenersAttached) {
+        return;
+    }
+    // 聊天输入和发送
+    const sendButton = document.getElementById('sendButton');
+    const userInput = document.getElementById('userInput');
+    if (sendButton) sendButton.addEventListener('click', sendMessage);
+    if (userInput) {
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    }
+
+    // 侧边栏和头部交互
+    const menuIcon = document.getElementById('menuIcon');
+    const sidebarToggle = document.getElementById('sidebarToggle');
+    const newChatButton = document.getElementById('newChatButton');
+    const settingButton = document.getElementById('settingButton');
+    const userAvatar = document.getElementById('userAvatar');
+    const uploadCsvButton = document.getElementById('uploadCsvButton');
+    
+    if (menuIcon) menuIcon.addEventListener('click', toggleSidebar);
+    if (sidebarToggle) sidebarToggle.addEventListener('click', toggleSidebar);
+    if (newChatButton) newChatButton.addEventListener('click', newChat);
+    if (settingButton) settingButton.addEventListener('click', showSettingPopup);
+    if (userAvatar) userAvatar.addEventListener('click', showUserInfoPopup);
+    if (uploadCsvButton) uploadCsvButton.addEventListener('click', triggerCsvUpload);
+
+    chatEventListenersAttached = true; // --- 新增：设置标志 ---
+}
+
 // 返回设置列表
 function showSettingOptions() {
     console.log("返回设置选项列表");
@@ -297,36 +377,81 @@ function showSettingOptions() {
 }
 
 // 初始化
-document.getElementById('messageInput').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
+document.addEventListener('DOMContentLoaded', () => {
+    console.log("DOM 已加载，检查登录状态...");
+    checkLoginStatus();
+    // 设置全局监听器，这些元素始终存在
+    setupGlobalEventListeners();
+
+    // 注意：聊天界面的事件监听器已移至 setupChatEventListeners 函数中
+    // 在登录成功后调用
+
+    if (csvUploaderInput) {
+        csvUploaderInput.addEventListener('change', handleCsvFileSelect);
     }
 });
 
 async function sendMessage() {
-    const messageInput = document.getElementById('messageInput');
-    const message = messageInput.value.trim();
-    if (!message || !currentUsername) return;
+    const userInput = document.getElementById('userInput');
+    const message = userInput.value.trim();
+    const isNewSession = !currentSessionId; // --- 新增：在开始时检查这是否是一个新会话 ---
+
+    if (!message) {
+        return;
+    }
+
+    if (!currentUsername) {
+        showError("请先登录再发送消息！");
+        return;
+    }
+
+    // 如果是新对话，先在后端创建会话
+    if (!currentSessionId) {
+        console.log("检测到新对话，正在后端创建会话...");
+        try {
+            const response = await fetch('/api/new_chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ username: currentUsername })
+            });
+            const data = await response.json();
+            if (data.success) {
+                currentSessionId = data.new_session_id; // 更新全局ID
+                console.log(`新会话已创建: ${currentSessionId}`);
+                // --- 移除：不在这里加载历史，因为标题还没更新 ---
+            } else {
+                showError(data.error || "创建新对话失败。");
+                return; // 创建失败则中止发送
+            }
+        } catch (error) {
+            showError("创建新对话时发生网络错误。");
+            console.error("创建新对话错误:", error);
+            return; // 创建失败则中止发送
+        }
+    }
 
     addMessage('user', message);
-    messageInput.value = '';
-    messageInput.style.height = 'auto'; // Reset height
+    userInput.value = ''; // 清空输入框
 
-    // Add a temporary loading message
-    addMessage('ai', '', true);
+    const loadingBubble = addMessage('ai', '', true);
 
     try {
         const response = await fetch('/api/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: message })
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            // --- 核心修改：在请求体中包含 session_id ---
+            body: JSON.stringify({ 
+                message: message, 
+                username: currentUsername, // username 仍可用于日志记录，但后端不再依赖它进行认证
+                session_id: currentSessionId 
+            })
         });
-        
-        // Remove the loading message before adding the actual response
-        const loadingElement = document.querySelector('.message.ai-message .loading-dots');
-        if (loadingElement) {
-            loadingElement.closest('.message.ai-message').remove();
+
+        // 移除加载动画
+        if (loadingBubble && loadingBubble.parentNode) {
+            loadingBubble.parentNode.removeChild(loadingBubble);
         }
 
         const data = await response.json();
@@ -334,14 +459,17 @@ async function sendMessage() {
         if (data.success) {
             // The new addMessage function can handle both structured and plain text responses
             addMessage('ai', data.response);
+            // --- 新增：在消息成功保存后（标题已更新），再加载历史记录 ---
+            if (isNewSession) {
+                loadHistory();
+            }
         } else {
             showError(data.error || '从服务器获取响应失败。');
         }
     } catch (error) {
         // Also remove loading message on error
-        const loadingElement = document.querySelector('.message.ai-message .loading-dots');
-        if (loadingElement) {
-            loadingElement.closest('.message.ai-message').remove();
+        if (loadingBubble && loadingBubble.parentNode) {
+            loadingBubble.parentNode.removeChild(loadingBubble);
         }
         console.error("发送消息时出错:", error);
         showError('发送消息时发生网络错误。');
@@ -356,25 +484,24 @@ function showError(msg) {
 
 // 创建新会话
 function newChat() {
-     const loggedInUser = currentUsername;
-     if (!loggedInUser) {
-         showError("请先登录！");
-         return;
-     }
-
-    if (confirm("确定要开始一个新的会话吗？\n（当前聊天记录会保存，可在历史中找回）")) {
-        fetch('/api/new_chat', { method: 'POST' })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    document.getElementById('chatArea').innerHTML = '';
-                    console.log("新会话已创建，重新加载历史记录...");
-                    loadHistory();
-                } else {
-                    showError(data.error);
-                }
-            }).catch(error => showError('创建新会话时出错: ' + error));
+    // 增加用户检查
+    if (!currentUsername) {
+        showError("请先登录！");
+        return;
     }
+
+    console.log("正在准备新聊天界面...");
+
+    currentSessionId = null; // 标记为新会话，但不立即在后端创建
+    chatArea.innerHTML = ''; // 清空聊天区域
+    
+    // 添加一条欢迎消息
+    addMessage('ai', '你好！这是一个新的对话。你想聊些什么？');
+    
+    // 激活输入框，方便用户直接输入
+    document.getElementById('userInput').focus();
+    
+    // 注意：后端会话将在用户发送第一条消息时创建。
 }
 
 // 新增侧边栏切换功能
@@ -446,51 +573,38 @@ async function loadHistory() {
     }
 }
 
-// 页面加载完成时
-document.addEventListener('DOMContentLoaded', () => {
-    console.log("DOM 已加载，检查登录状态...");
-    checkLoginStatus();
-
-    if (csvUploaderInput) {
-        csvUploaderInput.addEventListener('change', handleCsvFileSelect);
-    }
-});
-
-
 // 加载特定会话内容
 async function loadSession(sessionId) {
-    if (!sessionId || !currentUsername) return;
+    if (!currentUsername) {
+        showError("登录状态异常，请刷新页面。");
+        return;
+    }
+
     console.log(`用户 ${currentUsername} 正在加载会话: ${sessionId}`);
-    
-    // 清空现有聊天记录
-    document.getElementById('chatArea').innerHTML = '';
-    addMessage('ai', '正在加载历史消息...', true); // 显示加载提示
+    chatArea.innerHTML = '<div class="loading-spinner"></div>'; // 显示加载动画
 
     try {
-        const response = await fetch(`/api/load_session?session=${sessionId}`);
-
-        const loadingMessage = document.querySelector('.message.ai-message .loading-dots');
-        if(loadingMessage) loadingMessage.closest('.message.ai-message').remove();
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({error: '无法加载会话'}));
-            throw new Error(errorData.error);
-        }
-
+        const response = await fetch(`/api/load_session?session=${sessionId}&user=${currentUsername}`);
         const data = await response.json();
 
+        chatArea.innerHTML = ''; // 清除加载动画
+
         if (data.success) {
+            currentSessionId = sessionId; // <--- 核心修改：更新全局会话ID
             data.messages.forEach(msg => {
-                // 后端返回的 sender 是 'user' 或 'ai'
-                // 后端返回的 text 可能是字符串或对象，addMessage 会处理
                 addMessage(msg.sender, msg.text);
             });
+            // 确保加载会话后事件监听器也是最新的
+            // setupChatEventListeners();  // 不再需要，因为元素是持久的
+            console.log(`会话 ${sessionId} 已成功加载`);
         } else {
-            showError(data.error || '加载会话失败。');
+            showError(data.error || "无法加载会话。");
+            console.error("加载会话失败:", data.error);
         }
     } catch (error) {
-        console.error("加载会话内容失败:", error);
-        showError(`加载会话失败: ${error.message}`);
+        chatArea.innerHTML = ''; // 确保出错时也移除加载动画
+        showError("加载会话时发生网络错误。");
+        console.error("加载会话错误:", error);
     }
 }
 
@@ -516,12 +630,26 @@ async function handleCsvFileSelect(event) {
         return;
     }
 
+    // --- 新增：检查会话ID ---
+    if (!currentSessionId) {
+        showError("没有活动的会话，无法上传文件。请新建一个对话或加载历史会话。");
+        // 恢复按钮状态
+        if (uploadCsvButton) {
+            uploadCsvButton.textContent = '上传';
+            uploadCsvButton.disabled = false;
+        }
+        event.target.value = null; // 清除文件选择
+        return;
+    }
+    // -------------------------
+
     // 显示上传开始的用户消息和AI加载动画
     addMessage('user', `正在上传文件: ${file.name}`);
     const loadingMessageElement = addMessage('ai', '', true);
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('session_id', currentSessionId);
 
     if (uploadCsvButton) {
         uploadCsvButton.textContent = '上传中...';
