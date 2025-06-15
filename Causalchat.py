@@ -17,6 +17,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
 import threading
+import hashlib
 
 # --- 新增：为 Windows 设置 asyncio 事件循环策略 ---
 # 在 Windows 上，默认的 asyncio 事件循环 (SelectorEventLoop) 不支持子进程。
@@ -38,7 +39,6 @@ app = Flask(__name__, static_folder='static')
 app.secret_key = None 
 # ------------------------------------
 
-current_session = str(uuid.uuid4()) ## 全局会话 ID，现在主要由前端在加载历史时设置
 BASE_DIR = os.path.dirname(__file__)
 # --- 新增：确保图表目录存在 ---
 os.makedirs(os.path.join(BASE_DIR, 'static', 'generated_graphs'), exist_ok=True)
@@ -202,13 +202,12 @@ def check_database_readiness():
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # 检查所需的表是否存在
-            required_tables = ['users', 'chat_messages', 'uploaded_files']
+            # 检查新的、优化的表是否存在
+            required_tables = ['users', 'sessions', 'chat_messages', 'chat_attachments', 'uploaded_files', 'archived_sessions']
             cursor.execute(f"""
                 SELECT table_name 
                 FROM information_schema.tables 
-                WHERE table_schema = '{MYSQL_DATABASE}' 
-                AND table_name IN ('users', 'chat_messages', 'uploaded_files')
+                WHERE table_schema = '{MYSQL_DATABASE}'
             """)
             existing_tables = [row[0] for row in cursor.fetchall()]
             
@@ -218,25 +217,13 @@ def check_database_readiness():
                 logging.error(error_msg)
                 raise RuntimeError(error_msg)
             
-            # 检查 chat_messages 表是否有 ai_msg_structured 列（用于向后兼容性检查）
-            cursor.execute(f"""
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema = '{MYSQL_DATABASE}' 
-                AND table_name = 'chat_messages' 
-                AND column_name = 'ai_msg_structured'
-            """)
-            structured_column_exists = cursor.fetchone()
-            
-            if not structured_column_exists:
-                logging.warning("检测到旧版本数据库结构，缺少 'ai_msg_structured' 列。建议重新运行 database_init.py 升级数据库结构。")
-            
             # 简单的连接性测试
             cursor.execute("SELECT 1")
             test_result = cursor.fetchone()
             if not test_result or test_result[0] != 1:
                 raise RuntimeError("数据库连接测试失败")
             
-            logging.info(f"数据库 '{MYSQL_DATABASE}' 就绪检查通过。所有必需表已存在。")
+            logging.info(f"优化后的数据库 '{MYSQL_DATABASE}' 就绪检查通过。所有必需表已存在。")
             return True
             
     except mysql.connector.Error as e:
@@ -331,22 +318,19 @@ def get_chat_history(session_id: str, user_id: int, limit: int = 100) -> list:
             cursor = conn.cursor(dictionary=True)
             # 获取最近的 'limit' 条记录
             cursor.execute("""
-                SELECT user_msg, ai_msg FROM chat_messages
+                SELECT message_type, content FROM chat_messages
                 WHERE session_id = %s AND user_id = %s
-                ORDER BY timestamp DESC
+                ORDER BY created_at DESC
                 LIMIT %s
             """, (session_id, user_id, limit))
             recent_chats = cursor.fetchall()
 
             # 按时间倒序获取，所以要反转回来才是正确的对话顺序
             for row in reversed(recent_chats):
-                if row['user_msg']:
-                    history.append({"role": "user", "content": row['user_msg']})
-                if row['ai_msg']:
-                    # 注意：OpenAI API 的角色是 'assistant'
-                    history.append({"role": "assistant", "content": row['ai_msg']})
+                role = "user" if row['message_type'] == 'user' else "assistant"
+                history.append({"role": role, "content": row['content']})
             
-            logging.info(f"为会话 {session_id} 获取了 {len(history) // 2} 轮对话历史。")
+            logging.info(f"为会话 {session_id} 获取了 {len(history)} 条历史消息。")
             return history
             
     except mysql.connector.Error as e:
@@ -527,27 +511,21 @@ def handle_message():
 
     data = request.json
     user_input = data.get('message', '')
-    # username = data.get('username') # **移除：** 不再从请求体获取用户名
+    session_id = data.get('session_id') # <--- 新增：从前端获取会话ID
 
-    # if not username:
-    #      logging.warning("收到发送消息请求，但缺少用户名")
-    #      return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
+    if not session_id:
+        logging.error(f"用户 {username} (ID: {user_id}) 发送消息时缺少 session_id")
+        return jsonify({'success': False, 'error': '请求无效，缺少会话ID'}), 400
 
-    # user_data = find_user(username) # 获取用户数据，包括 id
-    # if not user_data:
-    #     logging.error(f"处理消息时用户 '{username}' 未找到。")
-    #     return jsonify({'success': False, 'error': '用户认证失败'}), 401
-    
-    # user_id = user_data['id'] # 提取 user_id
-
-    logging.info(f"用户 {username} (ID: {user_id}) 发送消息: {user_input[:50]}...") # 日志记录
+    logging.info(f"用户 {username} (ID: {user_id}) 在会话 {session_id} 中发送消息: {user_input[:50]}...")
 
     try:
-        # --- 核心修改：传递 user_id 和 username 到 ai_call ---
-        future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username), background_loop)
+        # --- 核心修改：将 session_id 传递给 ai_call ---
+        future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username, session_id), background_loop)
         response = future.result()  # 这会阻塞当前线程直到异步任务完成
 
-        save_chat(user_id, user_input, response)
+        # --- 核心修改：显式传递 session_id，不再使用全局变量 ---
+        save_chat(user_id, session_id, user_input, response)
         return jsonify({'success': True, 'response': response})
     except Exception as e:
         logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}", exc_info=True)
@@ -555,23 +533,40 @@ def handle_message():
 
 @app.route('/api/new_chat',methods=['POST'])
 def new_chat():
-  
-    global current_session
-    old_session = current_session
-    current_session = str(uuid.uuid4()) # 生成新的全局 session_id
-    logging.info(f"创建新会话 ID: {current_session} (旧: {old_session})")
-    # 注意：这个全局 current_session 可能在多用户场景下不是最佳实践
-    # 但对于单用户本地运行或前端驱动会话切换的场景是可行的
-    return jsonify({'success': True})
+    from flask import session
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'error': '用户未登录'}), 401
+    
+    user_id = session['user_id']
+    username = session.get('username', '未知用户')
+    new_session_id = str(uuid.uuid4())
+    # 为新会话创建一个默认标题
+    title = f"新对话 - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            # 在 sessions 表中创建一条新记录
+            cursor.execute(
+                "INSERT INTO sessions (id, user_id, title) VALUES (%s, %s, %s)",
+                (new_session_id, user_id, title)
+            )
+            conn.commit()
+        
+        logging.info(f"用户 {username} (ID: {user_id}) 创建新会话: {new_session_id}")
+        return jsonify({'success': True, 'new_session_id': new_session_id})
+    except mysql.connector.Error as e:
+        logging.error(f"为用户 {username} 创建新会话时数据库出错: {e}")
+        return jsonify({'success': False, 'error': '创建新会话失败'}), 500
 
 # --- 核心修改：重构 ai_call 函数以使用持久连接 ---
-async def ai_call(text, user_id, username):
+async def ai_call(text, user_id, username, session_id):
     """
     使用全局持久化的 MCP 会话与 LLM 交互并调用工具。
     不再在每次调用时创建或销毁连接。
     """
-    # --- 修改：上下文获取逻辑现在直接使用传入的 user_id ---
-    history_messages = get_chat_history(current_session, user_id, limit=20)
+    # --- 修改：上下文获取逻辑现在直接使用传入的 session_id ---
+    history_messages = get_chat_history(session_id, user_id, limit=20)
     # ----------------------------------------------------
 
     client = OpenAI(base_url=BASE_URL, api_key=apikey)
@@ -669,39 +664,86 @@ async def ai_call(text, user_id, username):
 
 
 ## 保存历史文件 ( 添加 user_id 参数和列)
-def save_chat(user_id, user_msg, ai_response): # 修改：username -> user_id, ai_msg -> ai_response
-    global current_session # 需要访问全局会话ID
+def save_chat(user_id, session_id, user_msg, ai_response):
+    """
+    将用户和AI的交互保存到新的优化数据库结构中。
+    - 在 chat_messages 中为用户和AI分别创建记录。
+    - 如果AI响应包含附件，则在 chat_attachments 中创建记录。
+    - 更新 sessions 表的元数据。
+    """
     timestamp_dt = datetime.now()
-
-    ai_msg_to_save = None
-    ai_structured_to_save = None
-
-    if isinstance(ai_response, dict):
-        # 无论如何都保存摘要
-        ai_msg_to_save = ai_response.get('summary', json.dumps(ai_response, ensure_ascii=False))
-
-        # 只有当它是需要特殊渲染的类型时，才保存结构化数据
-        if ai_response.get('type') == 'causal_graph':
-            # 将 dict 转换为 JSON 字符串以便存入数据库
-            ai_structured_to_save = json.dumps(ai_response, ensure_ascii=False)
-    
-    elif isinstance(ai_response, str):
-        ai_msg_to_save = ai_response
-    else:
-        # 兜底，以防意外格式
-        ai_msg_to_save = json.dumps(ai_response, ensure_ascii=False)
-
 
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO chat_messages (session_id, user_id, user_msg, ai_msg, ai_msg_structured, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (current_session, user_id, user_msg, ai_msg_to_save, ai_structured_to_save, timestamp_dt))
+            # --- 修改：使用字典游标并预先获取会话信息 ---
+            cursor = conn.cursor(dictionary=True)
+
+            # 0. 检查这是否是第一次保存消息，以决定是否更新标题
+            cursor.execute("SELECT message_count FROM sessions WHERE id = %s", (session_id,))
+            session_data = cursor.fetchone()
+            is_first_message = session_data and session_data['message_count'] == 0
+            
+            # 1. 保存用户消息
+            sql_user = """
+                INSERT INTO chat_messages (session_id, user_id, message_type, content, created_at)
+                VALUES (%s, %s, 'user', %s, %s)
+            """
+            cursor.execute(sql_user, (session_id, user_id, user_msg, timestamp_dt))
+            
+            # 2. 保存AI消息
+            ai_content = ""
+            has_attachment = False
+            attachment_content = None
+            attachment_type = 'other'
+
+            if isinstance(ai_response, dict):
+                ai_content = ai_response.get('summary', json.dumps(ai_response, ensure_ascii=False))
+                if ai_response.get('type') == 'causal_graph' and 'data' in ai_response:
+                    has_attachment = True
+                    attachment_type = 'causal_graph'
+                    attachment_content = json.dumps(ai_response, ensure_ascii=False) # 保存完整响应
+            elif isinstance(ai_response, str):
+                ai_content = ai_response
+            else:
+                ai_content = json.dumps(ai_response, ensure_ascii=False)
+
+            sql_ai = """
+                INSERT INTO chat_messages (session_id, user_id, message_type, content, has_attachment, created_at)
+                VALUES (%s, %s, 'ai', %s, %s, %s)
+            """
+            cursor.execute(sql_ai, (session_id, user_id, ai_content, has_attachment, timestamp_dt))
+            ai_message_id = cursor.lastrowid # 获取AI消息的ID，用于关联附件
+
+            # 3. 如果有附件，保存到 chat_attachments
+            if has_attachment and attachment_content:
+                sql_attachment = """
+                    INSERT INTO chat_attachments (message_id, attachment_type, content, created_at)
+                    VALUES (%s, %s, %s, %s)
+                """
+                cursor.execute(sql_attachment, (ai_message_id, attachment_type, attachment_content, timestamp_dt))
+
+            # --- 修改：根据是否为第一条消息，决定是否更新标题 ---
+            if is_first_message:
+                # 4a. 更新会话，包括新标题
+                new_title = user_msg[:20] # 截取前50个字符作为标题
+                sql_update_session = """
+                    UPDATE sessions 
+                    SET title = %s, last_activity_at = %s, message_count = message_count + 2
+                    WHERE id = %s AND user_id = %s
+                """
+                cursor.execute(sql_update_session, (new_title, timestamp_dt, session_id, user_id))
+            else:
+                # 4b. 只更新活动时间和消息数
+                sql_update_session = """
+                    UPDATE sessions 
+                    SET last_activity_at = %s, message_count = message_count + 2
+                    WHERE id = %s AND user_id = %s
+                """
+                cursor.execute(sql_update_session, (timestamp_dt, session_id, user_id))
+            
             conn.commit()
     except mysql.connector.Error as e:
-        logging.error(f"保存聊天记录到数据库时出错 (用户 ID: {user_id}, 会话: {current_session}): {e}")
+        logging.error(f"保存聊天记录到数据库时出错 (用户 ID: {user_id}, 会话: {session_id}): {e}")
     except Exception as e:
         logging.error(f"保存聊天时发生未知错误: {e}")
 
@@ -709,170 +751,113 @@ def save_chat(user_id, user_msg, ai_response): # 修改：username -> user_id, a
 # 会话管理接口 (**修改：** 过滤用户)
 @app.route('/api/sessions')
 def get_sessions():
-    # --- 重构：从 Session 获取用户身份 ---
     from flask import session
-    if 'user_id' not in session or 'username' not in session:
+    if 'user_id' not in session:
         return jsonify({"error": "用户未登录或会话已过期"}), 401
     
     user_id = session['user_id']
-    username = session['username']
+    logging.info(f"用户 {user_id} 请求会话列表 (新版逻辑)")
 
-
-    logging.info(f"用户 {username} (ID: {user_id}) 请求会话列表")
-    sessions = {}
-    # if os.path.exists(HISTORY_PATH): # <-- 移除对 HISTORY_PATH 的检查
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor(dictionary=True) #  <-- 使用字典游标
-            # SQL 查询语句基本兼容，COALESCE 和子查询在 MySQL 中也支持
-            # LENGTH(column) 在 MySQL 中也有效
-            # %s 是 MySQL 的参数占位符
+            cursor = conn.cursor(dictionary=True)
+            # 高效地直接从 sessions 表查询
             cursor.execute("""
-                SELECT
-                    session_id,
-                    MAX(timestamp) as last_time,
-                    (SELECT COALESCE(user_msg, '') FROM chat_messages cm_inner
-                     WHERE cm_inner.session_id = cm_outer.session_id
-                       AND cm_inner.user_id = cm_outer.user_id 
-                       AND cm_inner.user_msg IS NOT NULL AND LENGTH(cm_inner.user_msg) > 0
-                     ORDER BY cm_inner.timestamp DESC LIMIT 1) as preview_user_msg,
-                    
-                    (SELECT COALESCE(ai_msg, '') FROM chat_messages cm_inner
-                     WHERE cm_inner.session_id = cm_outer.session_id
-                       AND cm_inner.user_id = cm_outer.user_id 
-                       AND cm_inner.ai_msg IS NOT NULL AND LENGTH(cm_inner.ai_msg) > 0
-                     ORDER BY cm_inner.timestamp DESC LIMIT 1) as preview_ai_msg
-                FROM chat_messages cm_outer
-                WHERE user_id = %s
-                GROUP BY session_id
-                ORDER BY last_time DESC
+                SELECT id, title, last_activity_at
+                FROM sessions
+                WHERE user_id = %s AND is_archived = FALSE
+                ORDER BY last_activity_at DESC
             """, (user_id,)) 
             session_rows = cursor.fetchall()
-            # cursor.close()
 
         if not session_rows:
-            logging.info(f"用户 {username} (ID: {user_id}) 没有会话记录")
+            logging.info(f"用户 {user_id} 没有会话记录")
             return jsonify([])
 
-        for row in session_rows:
-            session_id = row["session_id"]
-            # MySQL TIMESTAMP 通常返回 datetime 对象，如果需要字符串，可以格式化
-            last_time_obj = row["last_time"] # 已经是字符串格式 "YYYY-MM-DD HH:MM:SS"
-            if isinstance(last_time_obj, datetime):
-                last_time_str = last_time_obj.strftime("%Y-%m-%d %H:%M:%S")
-            else: # 以防万一它已经是字符串了 (SQLite的MAX(timestamp)可能返回字符串)
-                last_time_str = str(last_time_obj)
-            
-            # 优先使用用户消息作为预览，如果用户消息为空，则尝试AI消息
-            preview_msg = row["preview_user_msg"]
-            if not preview_msg or preview_msg.strip() == "":
-                preview_msg = row["preview_ai_msg"]
-            if not preview_msg: # 如果两者都为空
-                preview_msg = "无预览内容"
+        # 格式化以适应前端期望的 (id, {preview, last_time}) 结构
+        session_list_for_frontend = [
+            (
+                row["id"], 
+                {
+                    "preview": row["title"], 
+                    "last_time": row["last_activity_at"].strftime("%Y-%m-%d %H:%M:%S")
+                }
+            )
+            for row in session_rows
+        ]
 
-
-            sessions[session_id] = {
-                "last_time": last_time_str,
-                "preview": preview_msg[:30] + "..." if len(preview_msg) > 30 else preview_msg
-            }
-
-    except mysql.connector.Error as e: # <-- 修改异常类型
-        logging.error(f"为用户 {username} 读取会话列表时数据库出错: {e}")
+    except mysql.connector.Error as e:
+        logging.error(f"为用户 {user_id} 读取会话列表时数据库出错: {e}")
         return jsonify({"error": f"读取历史记录时出错: {e}"}), 500
-    except Exception as e: # 捕获其他可能的未知错误
-            logging.error(f"处理历史记录时发生未知错误 (用户 {username}): {e}")
-            return jsonify({"error": f"处理历史记录时出错: {e}"}), 500
-
-    session_list_for_frontend = list(sessions.items())
-    logging.info(f"为用户 {username} 返回 {len(session_list_for_frontend)} 个会话")
+    
+    logging.info(f"为用户 {user_id} 返回 {len(session_list_for_frontend)} 个会话")
     return jsonify(session_list_for_frontend)
 
 
 # 加载特定会话内容 (**修改：** 增加用户验证)
 @app.route('/api/load_session')
 def load_session_content():
-    # --- 重构：从 Session 获取用户身份 ---
     from flask import session
-    if 'user_id' not in session or 'username' not in session:
+    if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
     user_id = session['user_id']
     username = session['username']
-    # ------------------------------------
 
-    global current_session # 声明我们要修改全局变量
     session_id = request.args.get('session')
-    # username = request.args.get('user') #  移除：不再从请求获取用户名
 
-    if not session_id: # 只需检查 session_id
-        logging.warning("加载会话请求缺少 session_id")
+    if not session_id:
         return jsonify({"success": False, "error": "缺少 session ID"}), 400
 
-    # user_data = find_user(username) # 获取用户数据
-    # if not user_data:
-    #     logging.warning(f"用户 {username} 请求加载会话，但用户不存在")
-    #     return jsonify({"success": False, "error": "用户不存在或无法加载会话"}), 404
-
-    # user_id = user_data['id'] # 提取 user_id
-
-    logging.info(f"用户 {username} (ID: {user_id}) 请求加载会话: {session_id}")
+    logging.info(f"用户 {username} (ID: {user_id}) 请求加载会话: {session_id} (新版逻辑)")
 
     messages = []
-    session_found_for_user = False
-    # if os.path.exists(HISTORY_PATH): # <-- 移除对 HISTORY_PATH 的检查
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor(dictionary=True) # <-- 使用字典游标
-            # %s 是 MySQL 的参数占位符
-            cursor.execute("""
-                SELECT user_msg, ai_msg, ai_msg_structured FROM chat_messages
-                WHERE session_id = %s AND user_id = %s 
-                ORDER BY timestamp ASC
-            """, (session_id, user_id)) # 修改：传递 user_id
-            chat_rows = cursor.fetchall()
-            # cursor.close()
-
-        if chat_rows:
-            session_found_for_user = True
-            for row in chat_rows:
-                if row["user_msg"]:
-                    messages.append({"sender": "user", "text": row["user_msg"]})
-                
-                # 优先使用结构化数据
-                if row["ai_msg_structured"]:
-                    # MySQL/MariaDB 的 JSON 类型通过 Connector/Python 返回的可能是字符串或已解析的 dict/list
-                    # 我们需要处理这两种情况
-                    try:
-                        # 如果是字符串，则解析；如果已经是 dict，直接使用
-                        structured_content = json.loads(row["ai_msg_structured"]) if isinstance(row["ai_msg_structured"], (str, bytes, bytearray)) else row["ai_msg_structured"]
-                        messages.append({"sender": "ai", "text": structured_content})
-                    except (json.JSONDecodeError, TypeError):
-                        # 如果解析失败，记录警告并回退到纯文本摘要
-                        logging.warning(f"无法解析会话 {session_id} 中的 ai_msg_structured，回退到 ai_msg。内容: {row['ai_msg_structured']}")
-                        if row["ai_msg"]:
-                             messages.append({"sender": "ai", "text": row["ai_msg"]})
-                elif row["ai_msg"]:
-                    # 如果没有结构化数据，使用纯文本摘要
-                    messages.append({"sender": "ai", "text": row["ai_msg"]})
-        
-        # 后端CSV版本中，如果session_id存在但不属于该用户，会继续遍历完再判断
-        # 在数据库版本中，WHERE子句直接处理了权限，如果chat_rows为空，
-        # 意味着要么session_id不存在，要么不属于该用户。
-        if not session_found_for_user:
-                logging.warning(f"用户 {username} 尝试加载的会话 {session_id} 不存在或不属于该用户")
+            cursor = conn.cursor(dictionary=True)
+            # 首先验证用户是否有权访问此会话
+            cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
+            if not cursor.fetchone():
+                logging.warning(f"用户 {username} 尝试访问无权或不存在的会话 {session_id}")
                 return jsonify({"success": False, "error": "无法加载该会话或会话不存在"}), 404
 
-            # 如果找到了属于该用户的会话记录
-        current_session = session_id # 切换后端的当前会话 ID
-        logging.info(f"用户 {username} 成功加载会话 {session_id}，后端会话已切换")
+            # 获取所有消息，并左连接附件表
+            cursor.execute("""
+                SELECT 
+                    cm.id, cm.message_type, cm.content, cm.has_attachment,
+                    ca.content as attachment_content
+                FROM chat_messages cm
+                LEFT JOIN chat_attachments ca ON cm.id = ca.message_id AND cm.has_attachment = TRUE
+                WHERE cm.session_id = %s
+                ORDER BY cm.created_at ASC
+            """, (session_id,))
+            chat_rows = cursor.fetchall()
+
+        for row in chat_rows:
+            sender = "user" if row["message_type"] == 'user' else "ai"
+            
+            # 如果是AI消息，且有附件，则优先使用附件内容
+            if sender == "ai" and row["has_attachment"] and row["attachment_content"]:
+                try:
+                    # 附件内容本身就是完整的结构化JSON
+                    structured_content = json.loads(row["attachment_content"])
+                    messages.append({"sender": "ai", "text": structured_content})
+                except (json.JSONDecodeError, TypeError):
+                    logging.warning(f"无法解析附件内容，回退到文本。Message ID: {row['id']}")
+                    messages.append({"sender": "ai", "text": row["content"]})
+            else:
+                # 对于用户消息或没有附件的AI消息，直接使用content
+                messages.append({"sender": sender, "text": row["content"]})
+        
+        logging.info(f"用户 {username} 成功加载会话 {session_id}")
         return jsonify({"success": True, "messages": messages})
 
-    except mysql.connector.Error as e: # <-- 修改异常类型
+    except mysql.connector.Error as e:
         logging.error(f"加载会话 {session_id} (用户 {username}) 时数据库出错: {e}")
         return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
-    except Exception as e: # 捕获其他可能的未知错误
-            logging.error(f"加载会话 {session_id} (用户 {username}) 时发生未知错误: {e}")
-            return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
+    except Exception as e:
+        logging.error(f"加载会话 {session_id} (用户 {username}) 时发生未知错误: {e}")
+        return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
  
 
 ## 设置
@@ -905,19 +890,13 @@ def upload_file():
     
     user_id = session['user_id']
     username = session.get('username', '未知用户') # 用于日志
+    
+    session_id = request.form.get('session_id')
+    if not session_id:
+        logging.warning(f"用户 {username} 上传文件请求缺少 session_id")
+        return jsonify({'success': False, 'error': '请求无效，缺少会话ID'}), 400
     # ------------------------------------
 
-    # username = request.form.get('username') # 移除
-    # if not username:
-    #     logging.warning("CSV上传请求缺少用户名")
-    #     return jsonify({'success': False, 'error': '用户未登录或请求无效'}), 401
-
-    # user_data = find_user(username)
-    # if not user_data:
-    #     logging.warning(f"用户 {username} 尝试上传CSV，但用户不存在")
-    #     return jsonify({'success': False, 'error': '用户认证失败'}), 401
-    # user_id = user_data['id']
-    
     if 'file' not in request.files:
         logging.warning(f"用户 {username} 上传CSV请求中没有文件部分")
         return jsonify({'success': False, 'error': '没有文件被上传'}), 400
@@ -940,51 +919,58 @@ def upload_file():
         logging.warning(f"用户 {username} 尝试上传非法文件类型: {original_filename} (MIME: {file.mimetype})")
         return jsonify({'success': False, 'error': '只允许上传 CSV 文件。请检查文件格式和扩展名。'}), 400
 
-    # 5. 读取文件内容
+    # 5. 读取文件内容并计算哈希
     try:
+        file.seek(0) # 确保从文件开头读取
         file_content = file.read() # 将整个文件内容读取为 bytes
+        file_hash = hashlib.sha256(file_content).hexdigest()
+        file_size = len(file_content)
     except Exception as e:
-        logging.error(f"用户 {username} 上传文件 {original_filename} 时读取内容失败: {e}")
-        return jsonify({'success': False, 'error': '读取文件内容失败'}), 500
+        logging.error(f"用户 {username} 上传文件 {original_filename} 时读取内容或计算哈希失败: {e}")
+        return jsonify({'success': False, 'error': '处理文件内容失败'}), 500
     
-    # 6. 检查重复文件并保存到数据库
+    # 6. 检查重复文件并保存到数据库 (使用哈希)
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor(dictionary=True) # 使用字典游标
             
-            # 检查是否已存在同名文件
+            # 检查是否已存在相同哈希的文件
             cursor.execute("""
-                SELECT filename FROM uploaded_files 
-                WHERE user_id = %s AND filename = %s
-            """, (user_id, original_filename))
+                SELECT id, filename FROM uploaded_files 
+                WHERE user_id = %s AND file_hash = %s
+            """, (user_id, file_hash))
             existing_file = cursor.fetchone()
             
             if existing_file:
-                # 文件已存在，更新现有记录
+                # 文件内容已存在，更新访问时间戳和计数
                 cursor.execute("""
                     UPDATE uploaded_files 
-                    SET mime_type = %s, file_content = %s, upload_timestamp = NOW()
-                    WHERE user_id = %s AND filename = %s
-                """, (file.mimetype, file_content, user_id, original_filename))
+                    SET last_accessed_at = NOW(), access_count = access_count + 1
+                    WHERE id = %s
+                """, (existing_file['id'],))
                 conn.commit()
-                action_message = f'文件 "{original_filename}" 已更新！'
-                logging.info(f"用户 {username} (ID: {user_id}) 更新了已存在的文件: {original_filename}")
+                # 使用原始文件名进行提示
+                action_message = f'您之前已上传过内容相同的文件 (名为 "{existing_file["filename"]}")。无需重复上传。'
+                logging.info(f"用户 {username} (ID: {user_id}) 上传了重复内容的文件: {original_filename} (Hash: {file_hash[:10]}...)")
             else:
                 # 文件不存在，插入新记录
                 cursor.execute("""
-                    INSERT INTO uploaded_files (user_id, filename, mime_type, file_content)
-                    VALUES (%s, %s, %s, %s)
-                """, (user_id, original_filename, file.mimetype, file_content))
+                    INSERT INTO uploaded_files (user_id, filename, original_filename, mime_type, file_size, file_hash, file_content)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (user_id, original_filename, original_filename, file.mimetype, file_size, file_hash, file_content))
                 conn.commit()
                 action_message = f'文件 "{original_filename}" 上传成功！'
                 logging.info(f"用户 {username} (ID: {user_id}) 成功上传新文件: {original_filename}")
         
         # 保存文件上传的聊天记录
-        user_message = f"正在上传文件: {original_filename}"
-        ai_message = f"已接收您的文件：{original_filename}\n\n{action_message}\n\n您现在可以询问我对此文件进行因果分析。"
-        save_chat(user_id, user_message, ai_message)
+        user_message = f"上传文件: {original_filename}"
+        # 修改AI响应，使其更清晰
+        ai_message_text = f"已接收您的文件：`{original_filename}`。\n\n{action_message}\n\n您现在可以对我提问，例如：请对`{original_filename}`进行因果分析"
+        ai_response = {"type": "text", "summary": ai_message_text}
         
-        return jsonify({'success': True, 'message': action_message})
+        save_chat(user_id, session_id, user_message, ai_response)
+        
+        return jsonify({'success': True, 'message': action_message, 'ai_response': ai_response})
     except mysql.connector.Error as e:
         logging.error(f"用户 {username} 保存文件 {original_filename} 到数据库时出错: {e}")
         return jsonify({'success': False, 'error': '保存文件到数据库失败'}), 500
