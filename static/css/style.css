@@ -192,7 +192,7 @@
     }
     
     .message .content {
-        padding: 10px 15px 10px 25px; /* 上 右 下 左，增加左内边距从15px到25px */
+        padding: 10px 15px 10px 15px; /* 上 右 下 左，增加左内边距从15px到25px */
         border-radius: 10px;
         word-break: break-word;
         line-height: 1.4;
@@ -221,6 +221,7 @@
         background-color: #f1f0f0; /* AI的气泡颜色 */
         margin-left: 20px; /* 只为AI消息增加左边距 */
         padding-left: 20px; /* 增加左边距 */
+
     }
     /* --- 修改结束 --- */
 
