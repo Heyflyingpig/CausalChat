@@ -947,20 +947,44 @@ def upload_file():
         logging.error(f"用户 {username} 上传文件 {original_filename} 时读取内容失败: {e}")
         return jsonify({'success': False, 'error': '读取文件内容失败'}), 500
     
-    # 6. 保存到数据库
+    # 6. 检查重复文件并保存到数据库
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # file_content 是 bytes 类型，MySQL 的 BLOB/LONGBLOB 类型可以直接存储
-            # %s 是 MySQL 的参数占位符
+            
+            # 检查是否已存在同名文件
             cursor.execute("""
-                INSERT INTO uploaded_files (user_id, filename, mime_type, file_content)
-                VALUES (%s, %s, %s, %s)
-            """, (user_id, original_filename, file.mimetype, file_content))
-            conn.commit()
-            # cursor.close()
-        logging.info(f"用户 {username} (ID: {user_id}) 成功上传文件: {original_filename} (MIME: {file.mimetype})")
-        return jsonify({'success': True, 'message': f'文件 "{original_filename}" 上传成功！'})
+                SELECT filename FROM uploaded_files 
+                WHERE user_id = %s AND filename = %s
+            """, (user_id, original_filename))
+            existing_file = cursor.fetchone()
+            
+            if existing_file:
+                # 文件已存在，更新现有记录
+                cursor.execute("""
+                    UPDATE uploaded_files 
+                    SET mime_type = %s, file_content = %s, upload_timestamp = NOW()
+                    WHERE user_id = %s AND filename = %s
+                """, (file.mimetype, file_content, user_id, original_filename))
+                conn.commit()
+                action_message = f'文件 "{original_filename}" 已更新！'
+                logging.info(f"用户 {username} (ID: {user_id}) 更新了已存在的文件: {original_filename}")
+            else:
+                # 文件不存在，插入新记录
+                cursor.execute("""
+                    INSERT INTO uploaded_files (user_id, filename, mime_type, file_content)
+                    VALUES (%s, %s, %s, %s)
+                """, (user_id, original_filename, file.mimetype, file_content))
+                conn.commit()
+                action_message = f'文件 "{original_filename}" 上传成功！'
+                logging.info(f"用户 {username} (ID: {user_id}) 成功上传新文件: {original_filename}")
+        
+        # 保存文件上传的聊天记录
+        user_message = f"正在上传文件: {original_filename}"
+        ai_message = f"已接收您的文件：{original_filename}\n\n{action_message}\n\n您现在可以询问我对此文件进行因果分析。"
+        save_chat(user_id, user_message, ai_message)
+        
+        return jsonify({'success': True, 'message': action_message})
     except mysql.connector.Error as e:
         logging.error(f"用户 {username} 保存文件 {original_filename} 到数据库时出错: {e}")
         return jsonify({'success': False, 'error': '保存文件到数据库失败'}), 500

@@ -516,9 +516,9 @@ async function handleCsvFileSelect(event) {
         return;
     }
 
-    // 显示加载动画
+    // 显示上传开始的用户消息和AI加载动画
     addMessage('user', `正在上传文件: ${file.name}`);
-    addMessage('ai', '', true);
+    const loadingMessageElement = addMessage('ai', '', true);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -536,13 +536,29 @@ async function handleCsvFileSelect(event) {
 
         const data = await response.json();
 
+        // 移除加载动画，显示最终结果
+        if (loadingMessageElement && loadingMessageElement.parentNode) {
+            loadingMessageElement.parentNode.removeChild(loadingMessageElement);
+        }
+
         if (data.success) {
-            alert(data.message || '文件上传成功！');
+            // 显示成功的AI回复消息
+            addMessage('ai', `已接收您的文件：${file.name}\n\n${data.message}\n\n您现在可以询问我对此文件进行因果分析。`);
         } else {
+            // 显示错误的AI回复消息
+            addMessage('ai', `文件上传失败：${data.error || '未知错误'}`);
             showError(data.error || '文件上传失败。');
         }
     } catch (error) {
         console.error("CSV Upload error:", error);
+        
+        // 移除加载动画
+        if (loadingMessageElement && loadingMessageElement.parentNode) {
+            loadingMessageElement.parentNode.removeChild(loadingMessageElement);
+        }
+        
+        // 显示网络错误的AI回复
+        addMessage('ai', '文件上传时发生网络错误，请检查网络连接后重试。');
         showError('上传文件时发生网络错误。');
     } finally {
         if (uploadCsvButton) {
@@ -641,15 +657,6 @@ function addMessage(sender, messageData, isLoading = false) {
     const messageElement = document.createElement('div');
     messageElement.classList.add('message', `${sender}-message`);
 
-    const avatar = document.createElement('div');
-    avatar.classList.add('avatar');
-    // 根据发送者设置头像内容或图片
-    if (sender === 'user') {
-        avatar.textContent = currentUsername ? currentUsername.charAt(0).toUpperCase() : 'U';
-    } else {
-        avatar.textContent = 'AI';
-    }
-
     const contentElement = document.createElement('div');
     contentElement.classList.add('content');
 
@@ -699,16 +706,12 @@ function addMessage(sender, messageData, isLoading = false) {
         // --- 修改结束 ---
     }
     
-    // --- 修改：根据发送者调整头像和内容顺序 ---
-    if (sender === 'user') {
-        messageElement.appendChild(contentElement);
-        messageElement.appendChild(avatar);
-    } else {
-        messageElement.appendChild(avatar);
-        messageElement.appendChild(contentElement);
-    }
-    // --- 修改结束 ---
+    // 直接添加内容元素，不需要头像
+    messageElement.appendChild(contentElement);
     
     chatArea.appendChild(messageElement);
     chatArea.scrollTop = chatArea.scrollHeight; // 自动滚动到底部
+    
+    // 返回消息元素，以便后续可以移除（例如加载动画）
+    return messageElement;
 }

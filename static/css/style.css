@@ -185,33 +185,18 @@
     /* --- 全面修改消息样式 --- */
     .message {
         display: flex;
-        align-items: flex-start; /* 头像和内容顶部对齐 */
-        gap: 10px; /* 头像和内容的间距 */
         max-width: 80%;
         position: relative;
         z-index: 1;
-        /* 容器本身不应该有背景色或内边距 */
-    }
-    
-    .message .avatar {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        background-color: #007bff; /* AI头像的默认颜色 */
-        color: white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-        flex-shrink: 0; /* 防止头像在空间不足时被压缩 */
+        margin-bottom: 10px; /* 消息之间的间距 */
     }
     
     .message .content {
-        padding: 10px 15px;
+        padding: 10px 15px 10px 25px; /* 上 右 下 左，增加左内边距从15px到25px */
         border-radius: 10px;
         word-break: break-word;
         line-height: 1.4;
-        /* 文字气泡是真正有背景色的元素 */
+        width: 100%; /* 让内容占满整个消息容器 */
     }
 
     /* 用户消息样式 */
@@ -224,17 +209,18 @@
         background-color: #dcf8c6; /* 用户的气泡颜色 */
     }
 
-    .user-message .avatar {
-        background-color: #4CAF50; /* 用户的头像颜色 */
-    }
+
 
     /* AI 消息样式 */
     .ai-message {
-        align-self: flex-start; /* AI消息容器靠左 */
+        align-self: flex-start;
+        
     }
 
     .ai-message .content {
         background-color: #f1f0f0; /* AI的气泡颜色 */
+        margin-left: 20px; /* 只为AI消息增加左边距 */
+        padding-left: 20px; /* 增加左边距 */
     }
     /* --- 修改结束 --- */
 
