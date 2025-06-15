@@ -76,16 +76,33 @@ def find_user(username: str) -> dict | None:
         return None
 
 def get_file_content_from_db(user_id: int, filename: str) -> bytes | None:
-    """从数据库为指定用户获取文件内容。"""
+    """从数据库为指定用户获取文件内容，并更新访问记录。"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor(dictionary=True)
+            # 优先按原始文件名查找，并按最新上传/访问排序
             cursor.execute(
-                "SELECT file_content FROM uploaded_files WHERE user_id = %s AND filename = %s ORDER BY upload_timestamp DESC LIMIT 1",
+                "SELECT id, file_content FROM uploaded_files WHERE user_id = %s AND original_filename = %s ORDER BY last_accessed_at DESC LIMIT 1",
                 (user_id, filename)
             )
             result = cursor.fetchone()
-            return result['file_content'] if result else None
+            
+            if result:
+                file_id = result['id']
+                file_content = result['file_content']
+                
+                # 更新访问时间和计数
+                cursor.execute(
+                    "UPDATE uploaded_files SET last_accessed_at = NOW(), access_count = access_count + 1 WHERE id = %s",
+                    (file_id,)
+                )
+                conn.commit()
+                logging.info(f"MCP Server: 成功获取文件 '{filename}' (ID: {file_id}) 并更新访问记录。")
+                return file_content
+            else:
+                logging.warning(f"MCP Server: 未找到文件 '{filename}' (用户ID: {user_id})。")
+                return None
+
     except mysql.connector.Error as e:
         logging.error(f"MCP Server: 从数据库获取文件 '{filename}' (用户ID: {user_id}) 时出错: {e}")
         return None
@@ -95,32 +112,6 @@ mcp = FastMCP("causal-analyzer")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @mcp.tool()
-async def read_file(filename: str) -> str:
-    """
-    读取指定文件的内容。
-
-    Args:
-        filename: 要读取的文件的名称 (例如: data_to_read.txt).
-    
-    Returns:
-        文件的内容，如果文件不存在或无法访问则返回错误信息。
-    """
-    try:
-        # 构建安全的文件路径 (相对于 mcp_server.py 所在的 CausalChatMCP 目录)
-        # 注意：此工具的上下文与主应用的文件系统不同。
-        secure_path = os.path.join(BASE_DIR, filename)
-        
-        # 验证路径是否在预期目录下
-        if os.path.commonpath([BASE_DIR]) != os.path.commonpath([BASE_DIR, secure_path]):
-            return f"错误：禁止访问路径 '{filename}'。"
-
-        if not os.path.exists(secure_path):
-            return f"错误：文件 '{filename}' 未找到。"
-
-        with open(secure_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        return f"读取文件时发生错误: {e}"
 
 @mcp.tool()
 async def perform_causal_analysis(filename: str, username: str) -> str:
@@ -156,6 +147,33 @@ async def perform_causal_analysis(filename: str, username: str) -> str:
     except Exception as e:
         logging.error(f"'perform_causal_analysis' 工具执行出错: {e}", exc_info=True)
         return json.dumps({"success": False, "message": f"执行工具时发生内部错误: {e}"}, ensure_ascii=False)
+
+async def read_file(filename: str) -> str:
+    """
+    读取指定文件的内容。
+
+    Args:
+        filename: 要读取的文件的名称 (例如: data_to_read.txt).
+    
+    Returns:
+        文件的内容，如果文件不存在或无法访问则返回错误信息。
+    """
+    try:
+        # 构建安全的文件路径 (相对于 mcp_server.py 所在的 CausalChatMCP 目录)
+        # 注意：此工具的上下文与主应用的文件系统不同。
+        secure_path = os.path.join(BASE_DIR, filename)
+        
+        # 验证路径是否在预期目录下
+        if os.path.commonpath([BASE_DIR]) != os.path.commonpath([BASE_DIR, secure_path]):
+            return f"错误：禁止访问路径 '{filename}'。"
+
+        if not os.path.exists(secure_path):
+            return f"错误：文件 '{filename}' 未找到。"
+
+        with open(secure_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        return f"读取文件时发生错误: {e}"
 
 if __name__ == "__main__":
     logging.info("--- MCP 因果分析服务器启动 ---")
