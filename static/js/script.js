@@ -537,6 +537,16 @@ function newChat() {
     }
 }
 
+// --- 新增：为标题添加可编辑监听器的辅助函数 ---
+function addEditableListener(element, sessionId, title) {
+    const handler = (e) => {
+        e.stopPropagation();
+        element.removeEventListener('click', handler); // 关键：在触发时移除自身，防止累积
+        makeTitleEditable(element, sessionId, title); // 调用编辑器函数
+    };
+    element.addEventListener('click', handler);
+}
+
 // 侧边栏切换功能
 function toggleSidebar() {
     if (!currentUsername) return;
@@ -552,65 +562,56 @@ function toggleSidebar() {
 
 // --- 会话标题可编辑 ---
 function makeTitleEditable(previewDiv, sessionId, oldTitle) {
-    // 暂时移除点击事件，防止重复触发
     const parent = previewDiv.parentElement;
-    const clonedPreviewDiv = previewDiv.cloneNode(true); // 克隆一个没有事件监听器的节点
-    // 为了防止可以二次点击该标题
-    parent.replaceChild(clonedPreviewDiv, previewDiv);
+    if (!parent) {
+        console.error("无法编辑标题：元素已脱离文档。");
+        return;
+    }
     
-    clonedPreviewDiv.innerHTML = ''; // 清空内容
-
+    // 创建一个新的输入框元素
     const input = document.createElement('input');
     input.type = 'text';
     input.value = oldTitle;
-    input.className = 'title-edit-input'; // 可以为此类添加样式
+    input.className = 'title-edit-input';
 
-    // 阻止在输入框上的点击事件冒泡到父元素，避免加载会话
+    // 阻止点击事件冒泡
     input.addEventListener('click', (e) => e.stopPropagation());
 
-    clonedPreviewDiv.appendChild(input);
+    // 用输入框替换掉原来的标题div
+    parent.replaceChild(input, previewDiv);
     input.focus();
     input.select();
 
     const finishEditing = async () => {
         const newTitle = input.value.trim();
         
-        // --- 核心修改：优化UI更新逻辑，消除延迟 ---
+        // 如果标题有效且被修改过
         if (newTitle && newTitle !== oldTitle) {
-            // 先在UI上显示"正在保存..."
             input.disabled = true;
             input.value = '正在保存...';
             
             const success = await updateSessionTitle(sessionId, newTitle);
             
             if (success) {
-                // 如果成功，直接在DOM中更新标题，而不是重新加载整个列表
+                // 如果成功，更新原始div的文本
                 previewDiv.textContent = newTitle;
-                // 将原始的、带有新文本的div替换回输入框
-                clonedPreviewDiv.replaceWith(previewDiv);
-                // 为下一次点击重新绑定事件
-                previewDiv.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    makeTitleEditable(previewDiv, sessionId, newTitle);
-                });
+                // 将更新后的div替换回输入框
+                parent.replaceChild(previewDiv, input);
+                // 关键：重新添加监听器，以便再次编辑
+                addEditableListener(previewDiv, sessionId, newTitle);
             } else {
-                // 如果失败，则重新加载历史记录以恢复到原始状态并显示错误
+                // 如果失败，则重新加载整个历史记录以恢复状态
                 await loadHistory();
             }
         } else {
-            // 如果标题为空或未更改，则直接恢复原始视图，不进行网络调用
-            // replaceWith 是 DOM API 的标准方法，用于将一个元素替换为另一个元素
-            // 它在现代浏览器中广泛支持，可以直接将一个节点替换为另一个节点
-            clonedPreviewDiv.replaceWith(previewDiv);
-            // 重新绑定事件
-            previewDiv.addEventListener('click', (e) => {
-                e.stopPropagation();
-                makeTitleEditable(previewDiv, sessionId, oldTitle);
-            });
+            // 如果标题为空或未更改，则直接将原始div替换回来
+            parent.replaceChild(previewDiv, input);
+            // 关键：同样需要重新添加监听器
+            addEditableListener(previewDiv, sessionId, oldTitle);
         }
     };
 
-    // 监听输入框的回车事件，仍然可以保存
+    // 监听输入框的事件
     input.addEventListener('blur', finishEditing);
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -671,11 +672,8 @@ async function loadHistory() {
                 previewDiv.textContent = info.preview;
                 previewDiv.title = '点击修改标题';
                 
-                // 防止加载会话，触发点击事件
-                previewDiv.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    makeTitleEditable(previewDiv, session_id, info.preview);
-                });
+                // 关键修改：使用辅助函数来添加监听器
+                addEditableListener(previewDiv, session_id, info.preview);
                 
                 sessionInfo.appendChild(timeDiv);
                 historyItem.appendChild(sessionInfo);
