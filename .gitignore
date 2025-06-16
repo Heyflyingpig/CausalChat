@@ -183,3 +183,6 @@ config.json
 
 # test
 test.py
+
+# cursor
+.cursor/
