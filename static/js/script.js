@@ -496,7 +496,7 @@ function newChat() {
     chatArea.innerHTML = ''; // 清空聊天区域
     
     // 添加一条欢迎消息
-    addMessage('ai', '你好！这是一个新的对话。你想聊些什么？');
+    addMessage('ai', '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析');
     
     // 激活输入框，方便用户直接输入
     document.getElementById('userInput').focus();
@@ -895,6 +895,7 @@ function renderCausalGraph(containerId, graphData) {
     }
 }
 
+// 加载消息
 function addMessage(sender, messageData, isLoading = false) {
     const messageElement = document.createElement('div');
     messageElement.classList.add('message', `${sender}-message`);
