@@ -504,7 +504,40 @@ function newChat() {
     // 注意：后端会话将在用户发送第一条消息时创建。
 }
 
-// 新增侧边栏切换功能
+// 更新会话标题
+ async function updateSessionTitle(sessionId, title) {
+    if (!title) {
+        console.log("标题为空，取消更新。");
+        return false; // 如果标题为空则不执行任何操作
+    }
+    try {
+        // --- 修改：使用POST方法，并将数据放在body中 ---
+        const response = await fetch('/api/change_session', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ title: title, session_id: sessionId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            console.log(`会话 ${sessionId} 标题已更新为 "${title}"`);
+            return true; // --- 修改：仅返回成功状态 ---
+        } else {
+            console.error("更新会话标题失败:", data.error);
+            showError(`更新标题失败: ${data.error || '未知错误'}`);
+            return false; // --- 修改：仅返回失败状态 ---
+        }
+    } catch (error) {
+        console.error("更新会话标题时发生网络错误:", error);
+        showError("更新标题时发生网络错误。");
+        return false; // --- 修改：仅返回失败状态 ---
+    }
+}
+
+// 侧边栏切换功能
 function toggleSidebar() {
     if (!currentUsername) return;
 
@@ -515,6 +548,78 @@ function toggleSidebar() {
     sidebar.classList.toggle('active');
     main.classList.toggle('sidebar-active');
     body.classList.toggle('sidebar-active');
+}
+
+// --- 会话标题可编辑 ---
+function makeTitleEditable(previewDiv, sessionId, oldTitle) {
+    // 暂时移除点击事件，防止重复触发
+    const parent = previewDiv.parentElement;
+    const clonedPreviewDiv = previewDiv.cloneNode(true); // 克隆一个没有事件监听器的节点
+    // 为了防止可以二次点击该标题
+    parent.replaceChild(clonedPreviewDiv, previewDiv);
+    
+    clonedPreviewDiv.innerHTML = ''; // 清空内容
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = oldTitle;
+    input.className = 'title-edit-input'; // 可以为此类添加样式
+
+    // 阻止在输入框上的点击事件冒泡到父元素，避免加载会话
+    input.addEventListener('click', (e) => e.stopPropagation());
+
+    clonedPreviewDiv.appendChild(input);
+    input.focus();
+    input.select();
+
+    const finishEditing = async () => {
+        const newTitle = input.value.trim();
+        
+        // --- 核心修改：优化UI更新逻辑，消除延迟 ---
+        if (newTitle && newTitle !== oldTitle) {
+            // 先在UI上显示"正在保存..."
+            input.disabled = true;
+            input.value = '正在保存...';
+            
+            const success = await updateSessionTitle(sessionId, newTitle);
+            
+            if (success) {
+                // 如果成功，直接在DOM中更新标题，而不是重新加载整个列表
+                previewDiv.textContent = newTitle;
+                // 将原始的、带有新文本的div替换回输入框
+                clonedPreviewDiv.replaceWith(previewDiv);
+                // 为下一次点击重新绑定事件
+                previewDiv.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    makeTitleEditable(previewDiv, sessionId, newTitle);
+                });
+            } else {
+                // 如果失败，则重新加载历史记录以恢复到原始状态并显示错误
+                await loadHistory();
+            }
+        } else {
+            // 如果标题为空或未更改，则直接恢复原始视图，不进行网络调用
+            // replaceWith 是 DOM API 的标准方法，用于将一个元素替换为另一个元素
+            // 它在现代浏览器中广泛支持，可以直接将一个节点替换为另一个节点
+            clonedPreviewDiv.replaceWith(previewDiv);
+            // 重新绑定事件
+            previewDiv.addEventListener('click', (e) => {
+                e.stopPropagation();
+                makeTitleEditable(previewDiv, sessionId, oldTitle);
+            });
+        }
+    };
+
+    // 监听输入框的回车事件，仍然可以保存
+    input.addEventListener('blur', finishEditing);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            input.blur(); // 触发 blur 事件来保存
+        } else if (e.key === 'Escape') {
+            input.value = oldTitle; // 恢复旧值
+            input.blur(); // 触发 blur 事件来取消编辑
+        }
+    });
 }
 
 // 加载历史记录
@@ -548,7 +653,11 @@ async function loadHistory() {
                 const info = session[1];
                 const historyItem = document.createElement('div');
                 historyItem.className = 'history-item';
-                historyItem.onclick = () => loadSession(session_id);
+                historyItem.addEventListener('click', (e) => {
+                    if (e.target.tagName.toLowerCase() !== 'input' && !e.target.classList.contains('preview-text')) {
+                        loadSession(session_id);
+                    }
+                });
                 
                 const sessionInfo = document.createElement('div');
                 sessionInfo.className = 'session-info';
@@ -560,6 +669,13 @@ async function loadHistory() {
                 const previewDiv = document.createElement('div');
                 previewDiv.className = 'preview-text';
                 previewDiv.textContent = info.preview;
+                previewDiv.title = '点击修改标题';
+                
+                // 防止加载会话，触发点击事件
+                previewDiv.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    makeTitleEditable(previewDiv, session_id, info.preview);
+                });
                 
                 sessionInfo.appendChild(timeDiv);
                 historyItem.appendChild(sessionInfo);

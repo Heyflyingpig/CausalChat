@@ -51,6 +51,17 @@
         justify-content: space-between;
         align-items: center; /* 交叉方向垂直排列。*/
     }
+    /* 会话编辑框样式 */
+    .title-edit-input {
+        width: 100%;
+        padding: 2px 4px;
+        border: 1px solid #007bff;
+        border-radius: 4px;
+        background-color: #3a3f4b; /* 暗色主题背景 */
+        color: #f0f0f0; /* 亮色文字 */
+        box-sizing: border-box; /* 确保 padding 不会撑大元素 */
+    }
+    
     .sidebar-footer {
         padding: 15px;
         border-top: 1px solid #eee;

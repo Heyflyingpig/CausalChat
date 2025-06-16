@@ -725,7 +725,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
             # --- 修改：根据是否为第一条消息，决定是否更新标题 ---
             if is_first_message:
                 # 4a. 更新会话，包括新标题
-                new_title = user_msg[:20] # 截取前50个字符作为标题
+                new_title = user_msg[:20] # 截取前20个字符作为标题
                 sql_update_session = """
                     UPDATE sessions 
                     SET title = %s, last_activity_at = %s, message_count = message_count + 2
@@ -859,6 +859,43 @@ def load_session_content():
         logging.error(f"加载会话 {session_id} (用户 {username}) 时发生未知错误: {e}")
         return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
  
+@app.route('/api/change_session', methods=['POST'])
+def change_session():
+    # --- 新增：用户认证检查 ---
+    from flask import session
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
+    
+    user_id = session['user_id']
+    
+    # --- 修改：从 POST 请求的 JSON body 中获取数据 ---
+    data = request.json
+    title = data.get('title')
+    session_id = data.get('session_id')
+
+    if not title or not session_id:
+        return jsonify({"success": False, "error": "缺少标题或会话ID"}), 400
+
+    try:
+        with get_db_connection() as conn:
+            # --- 修改：增加 user_id 条件以确保安全 ---
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE sessions SET title = %s WHERE id = %s AND user_id = %s",
+                (title, session_id, user_id)
+            )
+            conn.commit()
+            
+            # --- 新增：检查是否有行被更新，处理权限不足或会话不存在的情况 ---
+            if cursor.rowcount == 0:
+                logging.warning(f"用户 {user_id} 尝试更新不属于自己的会话 {session_id} 或会话不存在。")
+                return jsonify({"success": False, "error": "无法更新会话，权限不足或会话不存在"}), 404
+            
+        logging.info(f"用户 {user_id} 成功将会话 {session_id} 的标题更新为 '{title}'")
+        return jsonify({"success": True, "message": "会话标题已更新"})
+    except mysql.connector.Error as e:
+        logging.error(f"更新会话标题时数据库出错 (用户ID: {user_id}, 会话ID: {session_id}): {e}")
+        return jsonify({"success": False, "error": "更新会话标题时数据库出错"}), 500
 
 ## 设置
 @app.route('/api/setting')
