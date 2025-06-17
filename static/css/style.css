@@ -42,14 +42,13 @@
     }
     
     .history-item {
-        padding: 12px;
-        margin: 8px 0; /* 设置外边距。分别是上下，左右*/
-        border: 1px solid #eee; /* 设置边框。*/
-        cursor: pointer; /* 当鼠标悬停在该元素上时，显示小手形状的光标，提示用户这个元素是可以点击的。*/
-        border-radius: 5px; /* 半径：圆角*/
-        display: flex; /* 启用 Flexbox 布局，用于排列条目内部的会话信息和预览文本。*/
-        justify-content: space-between;
-        align-items: center; /* 交叉方向垂直排列。*/
+        /* --- 核心修改：移除布局属性，只作为舞台 --- */
+        margin: 8px 0;
+        border-radius: 5px;
+        position: relative; /* 保持相对定位，为子元素绝对定位提供基准 */
+        overflow: hidden;   /* 保持溢出隐藏，这是滑动效果的关键 */
+        transition: height 0.3s ease-out, opacity 0.3s ease-out;
+        border: 1px solid #3d3e49; /* 调整边框颜色以适应深色主题 */
     }
     /* 会话编辑框样式 */
     .title-edit-input {
@@ -121,7 +120,7 @@
     
     /* 伪元素 */
     .chat-area::before {
-        content: 'FLYINGPIG-Chatbox'; /* 你想显示的文字 */
+        content: 'FLYINGPIG-CausalChat'; /* 你想显示的文字 */
         position: absolute;
         top: 50%;
         left: 50%;
@@ -135,7 +134,7 @@
     }
     .session-info {
         font-size: 0.9em;  /* 设置字体大小。`em` 是一个相对单位，`0.9em` 表示字体大小是其父元素字体大小的 90%。*/
-        color: #666;
+        /* 颜色由下面的 .session-time 控制 */
     }
     .input-area {
         position: sticky;/* 元素在跨越特定阈值前为相对定位，之后为固定定位。
@@ -245,18 +244,67 @@
         margin-top: 10px; /* 与上方文本的间距 */
         background: #fff; /* 确保图表有白色背景 */
     }
-    
+    /* 会话预览样式 */
     .preview-text {
         font-size: 0.9em; /* 设置你想要的字体大小，例如 12px 或 0.8em */
-        color: #454545;
+        color: #454545; /* 修改为亮色以适应深色背景 */
         font-weight: bold;    
         
     }
     .session-time {
         font-size: 0.8em;
-        color: #888;
+        color: #888; /* 修改为亮灰色以适应深色背景 */
     }
 
+
+
+/* --- 新增：滑动删除样式 --- */
+.history-item-content {
+    /* --- 核心修改：接收布局属性，成为可滑动和点击的实体 --- */
+    position: relative;
+    z-index: 1; 
+    background-color: #ffffff; 
+    transition: transform 0.3s ease;
+    cursor: pointer;
+    /* 从 .history-item 移动过来的布局属性 */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    width: 100%;
+    box-sizing: border-box; /* 配合 width:100% 和 padding 使用 */
+}
+
+.swipe-actions {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    z-index: 0;
+}
+
+.delete-btn {
+    background-color: #e74c3c; /* 红色 */
+    color: white;
+    border: none;
+    height: 100%;
+    padding: 0 25px;
+    cursor: pointer;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+}
+
+.delete-btn:hover {
+    background-color: #c0392b; /* 深红色 */
+}
+    
+
+    /* 会话列表按钮样式 */
     .sidebar-button {
         padding: 10px 40px;
         border: none;  
@@ -585,3 +633,5 @@
     animation-delay: 0.4s;
 }
 /* --- 新增结束 --- */
+
+/* --- 样式结束 --- */

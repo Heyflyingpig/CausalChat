@@ -541,7 +541,7 @@ def new_chat():
     username = session.get('username', '未知用户')
     new_session_id = str(uuid.uuid4())
     # 为新会话创建一个默认标题
-    title = f"新对话 - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    title = f"新对话 - {datetime.now().strftime('%m-%d %H:%M')}"
 
     try:
         with get_db_connection() as conn:
@@ -725,7 +725,8 @@ def save_chat(user_id, session_id, user_msg, ai_response):
             # --- 修改：根据是否为第一条消息，决定是否更新标题 ---
             if is_first_message:
                 # 4a. 更新会话，包括新标题
-                new_title = user_msg[:20] # 截取前20个字符作为标题
+                new_title = user_msg[:8] # 截取前20个字符作为标题
+                new_title = new_title + "..." if len(user_msg) > 8 else new_title
                 sql_update_session = """
                     UPDATE sessions 
                     SET title = %s, last_activity_at = %s, message_count = message_count + 2
@@ -780,7 +781,7 @@ def get_sessions():
                 row["id"], 
                 {
                     "preview": row["title"], 
-                    "last_time": row["last_activity_at"].strftime("%Y-%m-%d %H:%M:%S")
+                    "last_time": row["last_activity_at"].strftime("%m-%d %H:%M")
                 }
             )
             for row in session_rows
@@ -896,6 +897,66 @@ def change_session():
     except mysql.connector.Error as e:
         logging.error(f"更新会话标题时数据库出错 (用户ID: {user_id}, 会话ID: {session_id}): {e}")
         return jsonify({"success": False, "error": "更新会话标题时数据库出错"}), 500
+
+@app.route('/api/delete_session', methods=['POST'])
+def delete_session():
+    # --- 核心修改：安全和完整的删除逻辑 ---
+    from flask import session
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
+    
+    user_id = session['user_id']
+    data = request.json
+    session_id = data.get('session_id')
+
+    if not session_id:
+        return jsonify({"success": False, "error": "缺少会话ID"}), 400
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 开启事务
+            conn.start_transaction()
+            
+            # 0. 验证用户是否有权限删除此会话
+            cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
+            if not cursor.fetchone():
+                conn.rollback() # 回滚事务
+                logging.warning(f"用户 {user_id} 尝试删除无权或不存在的会话 {session_id}")
+                return jsonify({"success": False, "error": "无法删除该会话，权限不足或会话不存在"}), 404
+
+            # 1. 删除与该会话相关的附件 (通过连接 chat_messages)
+            # 这是为了处理 chat_attachments 和 chat_messages 之间没有直接外键的情况
+            sql_delete_attachments = """
+                DELETE ca FROM chat_attachments ca
+                JOIN chat_messages cm ON ca.message_id = cm.id
+                WHERE cm.session_id = %s
+            """
+            cursor.execute(sql_delete_attachments, (session_id,))
+            logging.info(f"为会话 {session_id} 删除了 {cursor.rowcount} 个附件")
+
+            # 2. 删除该会话的所有聊天记录
+            cursor.execute("DELETE FROM chat_messages WHERE session_id = %s", (session_id,))
+            logging.info(f"为会话 {session_id} 删除了 {cursor.rowcount} 条聊天记录")
+
+            # 3. 删除会话本身
+            cursor.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
+            
+            # 提交事务
+            conn.commit()
+            
+            logging.info(f"用户 {user_id} 成功删除了会话 {session_id} 及其所有数据")
+            return jsonify({"success": True, "message": "会话已成功删除"})
+
+    except mysql.connector.Error as e:
+        conn.rollback() # 确保出错时回滚
+        logging.error(f"删除会话 {session_id} (用户 {user_id}) 时数据库出错: {e}")
+        return jsonify({"success": False, "error": "删除会话时数据库出错"}), 500
+    except Exception as e:
+        conn.rollback() # 确保出错时回滚
+        logging.error(f"删除会话 {session_id} (用户 {user_id}) 时发生未知错误: {e}")
+        return jsonify({"success": False, "error": "删除会话时发生未知错误"}), 500
 
 ## 设置
 @app.route('/api/setting')

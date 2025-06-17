@@ -649,16 +649,34 @@ async function loadHistory() {
         if (Object.keys(sessions).length === 0) {
             historyList.innerHTML = '<p class="history-empty-message">还没有任何对话记录。</p>';
         } else {
+            // --- 新增：用于跟踪当前打开的滑动项 ---
+            let currentlyOpenItem = null;
+
             sessions.forEach(session => {
                 const session_id = session[0];
                 const info = session[1];
+
+                // --- 核心修改：创建新的DOM结构以支持滑动 ---
                 const historyItem = document.createElement('div');
                 historyItem.className = 'history-item';
-                historyItem.addEventListener('click', (e) => {
-                    if (e.target.tagName.toLowerCase() !== 'input' && !e.target.classList.contains('preview-text')) {
-                        loadSession(session_id);
-                    }
-                });
+                historyItem.setAttribute('data-session-id', session_id);
+
+                // 删除按钮容器
+                const swipeActions = document.createElement('div');
+                swipeActions.className = 'swipe-actions';
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '删除';
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    handleDeleteSession(session_id, historyItem);
+                };
+                swipeActions.appendChild(deleteBtn);
+
+                // 可见内容容器
+                const itemContent = document.createElement('div');
+                itemContent.className = 'history-item-content';
                 
                 const sessionInfo = document.createElement('div');
                 sessionInfo.className = 'session-info';
@@ -676,14 +694,156 @@ async function loadHistory() {
                 addEditableListener(previewDiv, session_id, info.preview);
                 
                 sessionInfo.appendChild(timeDiv);
-                historyItem.appendChild(sessionInfo);
-                historyItem.appendChild(previewDiv);
+                itemContent.appendChild(sessionInfo); // 将 info 放入 content
+                itemContent.appendChild(previewDiv); // 将 preview 放入 content
+
+                historyItem.appendChild(swipeActions); // 先添加操作按钮
+                historyItem.appendChild(itemContent);  // 再添加可见内容
+
                 historyList.appendChild(historyItem);
+
+                // --- 新增：滑动逻辑 ---
+                let isDragging = false;
+                let startX = 0;
+                let currentX = 0;
+                let hasMoved = false; // --- 关键：用于区分拖拽和点击的标志 ---
+                const threshold = -70; // 滑动阈值
+
+                const closeCurrentlyOpen = () => {
+                    if (currentlyOpenItem && currentlyOpenItem !== itemContent) {
+                        currentlyOpenItem.style.transform = 'translateX(0px)';
+                    }
+                    currentlyOpenItem = null;
+                };
+
+                const onDragStart = (e) => {
+                    // 如果点击的是输入框或标题，则不开始拖动
+                    if (e.target.tagName.toLowerCase() === 'input' || e.target.classList.contains('preview-text')) {
+                        return;
+                    }
+                    closeCurrentlyOpen();
+                    hasMoved = false; // --- 关键：每次开始拖拽时，重置标志 ---
+                    isDragging = true;
+                    startX = e.type.includes('mouse') ? e.pageX : e.touches[0].pageX;
+                    itemContent.style.transition = 'none'; // 拖动时禁用平滑过渡
+                };
+
+                const onDragMove = (e) => {
+                    if (!isDragging) return;
+
+                    const moveX = e.type.includes('mouse') ? e.pageX : e.touches[0].pageX;
+                    // --- 关键：如果移动超过一个微小距离，就确认为拖拽 ---
+                    if (!hasMoved && Math.abs(moveX - startX) > 5) {
+                        hasMoved = true;
+                    }
+
+                    e.preventDefault(); // 防止页面滚动
+                    currentX = moveX;
+                    let diff = currentX - startX;
+                    if (diff > 0) diff = 0; // 只允许向左滑
+                    if (diff < threshold * 1.5) diff = threshold * 1.5;
+
+                    itemContent.style.transform = `translateX(${diff}px)`;
+                };
+
+                const onDragEnd = () => {
+                    if (!isDragging) return;
+                    isDragging = false;
+                    // 重新启用平滑过渡，让"吸附"动画生效
+                    itemContent.style.transition = 'transform 0.3s ease';
+                    
+                    // --- 核心修改：使用 getComputedStyle 来可靠地获取当前位置 ---
+                    const computedStyle = window.getComputedStyle(itemContent);
+                    // DOMMatrix 可以安全地解析 transform 属性，无论是 'translateX' 还是 'matrix'
+                    const transformMatrix = new DOMMatrix(computedStyle.transform);
+                    const finalX = transformMatrix.m41; // m41 是 X 轴的平移量
+
+                    // 如果滑动距离小于阈值的一半，则认为用户是想打开会话
+                    if (finalX < threshold / 2) {
+                        itemContent.style.transform = `translateX(${threshold}px)`;
+                        currentlyOpenItem = itemContent; // 更新当前打开的项
+                    } else {
+                        itemContent.style.transform = 'translateX(0px)';
+                    }
+                };
+                
+                // 加载会话的点击事件
+                itemContent.addEventListener('click', (e) => {
+                    // --- 关键：如果是拖拽，则不执行点击逻辑 ---
+                    if (hasMoved) {
+                        e.stopPropagation();
+                        return;
+                    }
+
+                    if (e.target.tagName.toLowerCase() !== 'input' && !e.target.classList.contains('preview-text')) {
+                        const currentTransform = window.getComputedStyle(itemContent).transform;
+                        if(currentTransform === 'none' || currentTransform === 'matrix(1, 0, 0, 1, 0, 0)'){
+                             loadSession(session_id);
+                        } else {
+                            // 如果是打开状态，则关闭它
+                            itemContent.style.transform = 'translateX(0px)';
+                            currentlyOpenItem = null;
+                        }
+                    }
+                });
+
+                // 绑定鼠标和触摸事件
+                itemContent.addEventListener('mousedown', onDragStart);
+                itemContent.addEventListener('mousemove', onDragMove);
+                itemContent.addEventListener('mouseup', onDragEnd);
+                itemContent.addEventListener('mouseleave', onDragEnd); // 鼠标离开也结束拖动
+
+                itemContent.addEventListener('touchstart', onDragStart);
+                itemContent.addEventListener('touchmove', onDragMove);
+                itemContent.addEventListener('touchend', onDragEnd);
             });
         }
     } catch (error) {
         console.error("加载历史记录失败:", error);
         historyList.innerHTML = `<p class="history-empty-message">加载历史记录失败: ${error.message}</p>`;
+    }
+}
+
+// --- 新增：处理会话删除的函数 ---
+async function handleDeleteSession(sessionId, element) {
+    if (!confirm("确定要永久删除此会话及其所有消息吗？此操作无法撤销。")) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/delete_session', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: sessionId })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            console.log("会话已在后端删除");
+            // 平滑的删除动画
+            element.style.height = `${element.offsetHeight}px`; // 固定高度
+            element.style.opacity = '0';
+            element.style.transform = 'translateX(-100%)';
+            element.style.marginBottom = `-${element.offsetHeight}px`;
+            
+            setTimeout(() => {
+                element.remove();
+                // 检查是否列表已空
+                if (historyList.children.length === 0) {
+                     historyList.innerHTML = '<p class="history-empty-message">还没有任何对话记录。</p>';
+                }
+            }, 300); // 匹配CSS过渡时间
+        } else {
+            showError(data.error || "删除失败，请重试。");
+            // 如果删除失败，则关闭滑动状态
+            const content = element.querySelector('.history-item-content');
+            if (content) {
+                content.style.transform = 'translateX(0px)';
+            }
+        }
+    } catch (error) {
+        showError("删除会话时发生网络错误。");
+        console.error("删除会话错误:", error);
     }
 }
 
