@@ -55,8 +55,7 @@
     .file-list-container {
         /* 文件列表的容器 */
         flex-shrink: 0; /* 防止此容器在空间不足时被压缩 */
-        height: 25%; /* 固定占据侧边栏下半部分自定义的高度 */
-        overflow-y: auto; /* 当内容超出容器高度时，显示垂直滚动条 */
+        height: 28%; /* 固定占据侧边栏下半部分自定义的高度 */
         display: flex; /* 使用Flexbox布局 */
         flex-direction: column; 
         margin-top: 10px; /* 与上方元素的间距 */
@@ -65,6 +64,7 @@
     #fileList {
         /* 文件列表自身的容器 */
         flex: 1; /* 填充 .file-list-container 中的可用空间 */
+        overflow-y: auto; /* 当内容超出容器高度时，显示垂直滚动条 */
         padding: 0 15px 15px 15px; /* 为列表内容添加内边距 上右下左*/
     }
     
