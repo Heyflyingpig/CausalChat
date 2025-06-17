@@ -1273,15 +1273,21 @@ async function loadFiles() {
                     }
                 };
                 
+                // 如果点击该文件
                 itemContent.addEventListener('click', (e) => {
                     if (hasMoved) {
                         e.stopPropagation();
                         return;
                     }
-                    // 点击文件项的逻辑可以后续添加
-                    // 例如，可以在聊天中插入关于此文件的提示
-                    console.log(`Clicked on file: ${info.preview}`);
-                    addMessage('user', `请问关于文件 "${info.preview}" 有什么可以帮助您的？`);
+                    // 点击文件项的逻辑：将文件名插入输入框
+                    const userInput = document.getElementById('userInput');
+                    if (userInput) {
+                        // 将预设的分析指令和文件名填入输入框
+                        userInput.value = `请对文件"${info.preview}"进行因果分析`;
+                        // 聚焦输入框，方便用户直接发送
+                        userInput.focus();
+                    }
+                    console.log(`File "${info.preview}" reference inserted into input box.`);
                 });
 
                 itemContent.addEventListener('mousedown', onDragStart);

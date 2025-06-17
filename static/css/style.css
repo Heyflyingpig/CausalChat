@@ -319,10 +319,7 @@
          margin-top: 10px; /* 与上方元素的间距 */
      }
  
-     .file-item:last-child {
-         /* 文件列表中的最后一个项目 */
-         border-bottom: block; 
-     }
+
  
      .file-item-content {
          /* 文件列表项的可视内容区域 */
