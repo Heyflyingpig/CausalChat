@@ -99,20 +99,30 @@
         
         <div class="sidebar-content">
             <!-- 这个 div 使用了 `style` 属性来直接设置内联样式。这通常用于特定、小范围或动态的样式设置。 -->
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <div style="display: flex; gap: 10px; padding: 15px; padding-bottom: 0; margin-bottom: 15px;">
                 <button id="newChatButton" class="sidebar-button">新建对话</button>
             </div>
             
-            <div id="historyList">
-                <div class="history-item" style="display: none;">
-                     <!-- style="display: none;": 内联样式，使这个模板默认不显示。JavaScript 加载真实数据时会创建新的、可见的 history-item。 -->
-                    <div class="session-info">
-                        <div class="session-time"></div>
+            <div class="history-list-container">
+                <div id="historyList">
+                    <div class="history-item" style="display: none;">
+                         <!-- style="display: none;": 内联样式，使这个模板默认不显示。JavaScript 加载真实数据时会创建新的、可见的 history-item。 -->
+                        <div class="session-info">
+                            <div class="session-time"></div>
+                        </div>
+                        <div class="preview-text"></div>
                     </div>
-                    <div class="preview-text"></div>
+                </div>
             </div>
-        </div>
-    </div> <!-- sidebar-content 的结束标签 -->
+
+            <div class="file-list-container">
+                <div class="sidebar-divider"></div>
+                <h4 class="sidebar-subtitle">文件列表</h4>
+                <div id="fileList">
+                </div>
+            </div>
+
+        </div> <!-- sidebar-content 的结束标签 -->
         
         <div class="sidebar-footer">
             <button id="settingButton">设置</button>

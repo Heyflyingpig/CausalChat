@@ -8,6 +8,7 @@ const userAvatar = document.getElementById('userAvatar'); //头像
 const userInfoPopup = document.getElementById('userInfoPopup');
 const userInfoContent = document.getElementById('userInfoContent');
 const historyList = document.getElementById('historyList'); // 获取 historyList 元素
+const fileList = document.getElementById('fileList'); // --- 新增: 获取 fileList 元素
 const settingPopup = document.getElementById('settingPopup'); // 获取设置
 const settingOptions = document.getElementById('settingOptions'); // 新增：获取设置选项容器
 const settingContentDisplay = document.getElementById('settingContentDisplay'); // 获取内容显示区域
@@ -124,6 +125,7 @@ async function handleLogin() {
 
             updateUserInfo(); // 更新用户信息显示
             loadHistory(); // --- 新增：先加载历史记录
+            loadFiles(); // --- 新增: 加载文件列表 ---
             newChat(); // --- 修改：然后准备一个新对话界面
              // 清空登录表单
             usernameInput.value = '';
@@ -162,6 +164,7 @@ async function handleLogout() {
             closeUserInfoPopup(); // 关闭用户信息弹窗
             document.getElementById('chatArea').innerHTML = ''; // 清空聊天区域
             historyList.innerHTML = ''; // 清空历史列表
+            fileList.innerHTML = ''; // --- 新增: 清空文件列表 ---
             updateUserInfo(); // 清空头像等信息
             console.log("用户已退出登录，UI已更新");
         } else {
@@ -191,6 +194,7 @@ async function checkLoginStatus() {
 
             updateUserInfo(); // 更新用户信息显示 (稍后修改此函数)
             loadHistory(); // 加载历史记录 (稍后修改此函数)
+            loadFiles(); // --- 新增: 加载文件列表 ---
         } else {
             console.log("后端验证：用户未登录，显示登录界面");
             currentUsername = null; // **修改**: 确保全局变量为空
@@ -199,6 +203,7 @@ async function checkLoginStatus() {
             loginForm.style.display = 'block';
             registerForm.style.display = 'none';
             historyList.innerHTML = ''; // 清空可能存在的旧历史记录
+            fileList.innerHTML = ''; // --- 新增: 清空文件列表 ---
             updateUserInfo(); // 清空头像等 (稍后修改此函数)
         }
     } catch (error) {
@@ -975,6 +980,7 @@ async function handleCsvFileSelect(event) {
         if (data.success) {
             // 显示成功的AI回复消息
             addMessage('ai', `已接收您的文件：${file.name}\n\n${data.message}\n\n您现在可以询问我对此文件进行因果分析。`);
+            loadFiles(); // --- 新增：刷新文件列表
         } else {
             // 显示错误的AI回复消息
             addMessage('ai', `文件上传失败：${data.error || '未知错误'}`);
@@ -1146,4 +1152,191 @@ function addMessage(sender, messageData, isLoading = false) {
     
     // 返回消息元素，以便后续可以移除（例如加载动画）
     return messageElement;
+}
+
+// --- 新增：加载文件列表的函数 ---
+async function loadFiles() {
+    if (!currentUsername) {
+        if (fileList) fileList.innerHTML = '<p class="files-empty-message">请先登录以查看文件列表。</p>';
+        return;
+    }
+    console.log(`为用户 ${currentUsername} 加载文件列表...`);
+    if (!fileList) return;
+
+    try {
+        const response = await fetch(`/api/files`);
+        if (!response.ok) {
+            if (response.status === 401) {
+                 fileList.innerHTML = '<p class="files-empty-message">会话已过期，请重新登录。</p>';
+                 return;
+            }
+            throw new Error(`服务器错误: ${response.status}`);
+        }
+        const files = await response.json();
+        
+        fileList.innerHTML = ''; // 清空旧列表
+
+        if (Object.keys(files).length === 0) {
+            fileList.innerHTML = '<p class="files-empty-message">还没有任何文件记录。</p>';
+        } else {
+            let currentlyOpenFileItem = null;
+
+            files.forEach(file => {
+                const file_id = file[0];
+                const info = file[1];
+
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.setAttribute('data-file-id', file_id);
+
+                const swipeActions = document.createElement('div');
+                swipeActions.className = 'swipe-actions';
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '删除';
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    handleDeleteFile(file_id, fileItem);
+                };
+                swipeActions.appendChild(deleteBtn);
+
+                const itemContent = document.createElement('div');
+                itemContent.className = 'file-item-content';
+                
+                const sessionInfo = document.createElement('div');
+                sessionInfo.className = 'session-info';
+                
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'session-time';
+                timeDiv.textContent = info.last_time;
+                
+                const previewDiv = document.createElement('div');
+                previewDiv.className = 'preview-text';
+                previewDiv.textContent = info.preview;
+                previewDiv.title = info.preview;
+                
+                sessionInfo.appendChild(timeDiv);
+                itemContent.appendChild(sessionInfo);
+                itemContent.appendChild(previewDiv);
+
+                fileItem.appendChild(swipeActions);
+                fileItem.appendChild(itemContent);
+
+                fileList.appendChild(fileItem);
+
+                // --- 滑动逻辑 (与 history item 相同) ---
+                let isDragging = false, startX = 0, currentX = 0, hasMoved = false;
+                const threshold = -70;
+
+                const closeCurrentlyOpen = () => {
+                    if (currentlyOpenFileItem && currentlyOpenFileItem !== itemContent) {
+                        currentlyOpenFileItem.style.transform = 'translateX(0px)';
+                    }
+                    currentlyOpenFileItem = null;
+                };
+
+                const onDragStart = (e) => {
+                    closeCurrentlyOpen();
+                    hasMoved = false;
+                    isDragging = true;
+                    startX = e.type.includes('mouse') ? e.pageX : e.touches[0].pageX;
+                    itemContent.style.transition = 'none';
+                };
+
+                const onDragMove = (e) => {
+                    if (!isDragging) return;
+                    if (!hasMoved && Math.abs((e.type.includes('mouse') ? e.pageX : e.touches[0].pageX) - startX) > 5) {
+                        hasMoved = true;
+                    }
+                    e.preventDefault();
+                    currentX = e.type.includes('mouse') ? e.pageX : e.touches[0].pageX;
+                    let diff = currentX - startX;
+                    if (diff > 0) diff = 0;
+                    if (diff < threshold * 1.5) diff = threshold * 1.5;
+                    itemContent.style.transform = `translateX(${diff}px)`;
+                };
+
+                const onDragEnd = () => {
+                    if (!isDragging) return;
+                    isDragging = false;
+                    itemContent.style.transition = 'transform 0.3s ease';
+                    const computedStyle = window.getComputedStyle(itemContent);
+                    const transformMatrix = new DOMMatrix(computedStyle.transform);
+                    const finalX = transformMatrix.m41;
+
+                    if (finalX < threshold / 2) {
+                        itemContent.style.transform = `translateX(${threshold}px)`;
+                        currentlyOpenFileItem = itemContent;
+                    } else {
+                        itemContent.style.transform = 'translateX(0px)';
+                    }
+                };
+                
+                itemContent.addEventListener('click', (e) => {
+                    if (hasMoved) {
+                        e.stopPropagation();
+                        return;
+                    }
+                    // 点击文件项的逻辑可以后续添加
+                    // 例如，可以在聊天中插入关于此文件的提示
+                    console.log(`Clicked on file: ${info.preview}`);
+                    addMessage('user', `请问关于文件 "${info.preview}" 有什么可以帮助您的？`);
+                });
+
+                itemContent.addEventListener('mousedown', onDragStart);
+                itemContent.addEventListener('mousemove', onDragMove);
+                itemContent.addEventListener('mouseup', onDragEnd);
+                itemContent.addEventListener('mouseleave', onDragEnd);
+                itemContent.addEventListener('touchstart', onDragStart);
+                itemContent.addEventListener('touchmove', onDragMove);
+                itemContent.addEventListener('touchend', onDragEnd);
+            });
+        }
+    } catch (error) {
+        console.error("加载文件列表失败:", error);
+        fileList.innerHTML = `<p class="files-empty-message">加载文件列表失败: ${error.message}</p>`;
+    }
+}
+
+// --- 新增：处理文件删除的函数 ---
+async function handleDeleteFile(fileId, element) {
+    if (!confirm("确定要永久删除此文件吗？此操作无法撤销。")) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/delete_file', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ file_id: fileId })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            console.log("文件已在后端删除");
+            // 平滑的删除动画
+            element.style.height = `${element.offsetHeight}px`; // 固定高度
+            element.style.opacity = '0';
+            element.style.transform = 'translateX(-100%)';
+            element.style.marginBottom = `-${element.offsetHeight}px`;
+            
+            setTimeout(() => {
+                element.remove();
+                if (fileList.children.length === 0) {
+                     fileList.innerHTML = '<p class="files-empty-message">还没有任何文件记录。</p>';
+                }
+            }, 300); // 匹配CSS过渡时间
+        } else {
+            showError(data.error || "删除失败，请重试。");
+            // 如果删除失败，则关闭滑动状态
+            const content = element.querySelector('.file-item-content');
+            if (content) {
+                content.style.transform = 'translateX(0px)';
+            }
+        }
+    } catch (error) {
+        showError("删除文件时发生网络错误。");
+        console.error("删除文件错误:", error);
+    }
 }

@@ -795,6 +795,42 @@ def get_sessions():
     logging.info(f"为用户 {user_id} 返回 {len(session_list_for_frontend)} 个会话")
     return jsonify(session_list_for_frontend)
 
+@app.route('/api/files')
+# 获取文件列表
+def get_file_list():
+    from flask import session
+    if 'user_id' not in session:
+        return jsonify({"error": "用户未登录或会话已过期"}), 401
+    
+    user_id = session['user_id']
+    logging.info(f"用户 {user_id} 请求文件列表")
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT id, filename, last_accessed_at FROM uploaded_files WHERE user_id = %s ORDER BY last_accessed_at DESC", (user_id,))
+            file_rows = cursor.fetchall()
+        if not file_rows:
+            logging.info(f"用户 {user_id} 没有文件记录")
+            return jsonify([])
+        file_list_for_frontend = [
+            (
+                row["id"], 
+                {
+                    "preview": row["filename"], 
+                    "last_time": row["last_accessed_at"].strftime("%m-%d %H:%M")
+                }
+            )
+            for row in file_rows
+        ]
+
+    except mysql.connector.Error as e:
+        logging.error(f"为用户 {user_id} 读取文件列表时数据库出错: {e}")
+        return jsonify({"error": f"读取文件列表时出错: {e}"}), 500
+    
+    logging.info(f"为用户 {user_id} 返回 {len(file_list_for_frontend)} 个文件")
+    return jsonify(file_list_for_frontend)
+        
+            
 
 # 加载特定会话内容 (**修改：** 增加用户验证)
 @app.route('/api/load_session')
@@ -958,6 +994,42 @@ def delete_session():
         conn.rollback() # 确保出错时回滚
         logging.error(f"删除会话 {session_id} (用户 {user_id}) 时发生未知错误: {e}")
         return jsonify({"success": False, "error": "删除会话时发生未知错误"}), 500
+
+@app.route('/api/delete_file', methods=['POST'])
+def delete_file():
+    from flask import session
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
+    
+    user_id = session['user_id']
+    data = request.json
+    file_id = data.get('file_id')
+
+    if not file_id:
+        return jsonify({"success": False, "error": "缺少文件ID"}), 400
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 执行删除，确保文件属于用户
+            cursor.execute("DELETE FROM uploaded_files WHERE id = %s AND user_id = %s", (file_id, user_id))
+            
+            conn.commit()
+            
+            if cursor.rowcount == 0:
+                logging.warning(f"用户 {user_id} 尝试删除无权或不存在的文件 {file_id}")
+                return jsonify({"success": False, "error": "无法删除该文件，权限不足或文件不存在"}), 404
+            
+            logging.info(f"用户 {user_id} 成功删除了文件 {file_id}")
+            return jsonify({"success": True, "message": "文件已成功删除"})
+
+    except mysql.connector.Error as e:
+        logging.error(f"删除文件 {file_id} (用户 {user_id}) 时数据库出错: {e}")
+        return jsonify({"success": False, "error": "删除文件时数据库出错"}), 500
+    except Exception as e:
+        logging.error(f"删除文件 {file_id} (用户 {user_id}) 时发生未知错误: {e}")
+        return jsonify({"success": False, "error": "删除文件时发生未知错误"}), 500
 
 ## 设置
 @app.route('/api/setting')
