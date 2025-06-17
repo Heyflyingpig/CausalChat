@@ -1283,7 +1283,7 @@ async function loadFiles() {
                     const userInput = document.getElementById('userInput');
                     if (userInput) {
                         // 将预设的分析指令和文件名填入输入框
-                        userInput.value = `请对文件"${info.preview}"进行因果分析`;
+                        userInput.value += `请对文件"${info.preview}"进行因果分析`;
                         // 聚焦输入框，方便用户直接发送
                         userInput.focus();
                     }
