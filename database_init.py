@@ -210,7 +210,7 @@ class OptimizedDatabaseInitializer:
                 -- 分区表的主键必须包含分区键(created_at)
                 PRIMARY KEY (id, created_at),
                 
-                -- 注意：MySQL分区表不支持外键约束，数据完整性由应用层维护
+
                 -- FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
                 -- FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 
