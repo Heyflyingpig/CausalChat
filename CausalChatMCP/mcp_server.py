@@ -107,47 +107,103 @@ def get_file_content_from_db(user_id: int, filename: str) -> bytes | None:
         logging.error(f"MCP Server: 从数据库获取文件 '{filename}' (用户ID: {user_id}) 时出错: {e}")
         return None
 
+def get_recentfile(user_id: int) -> dict | None:
+    """获取用户最近上传或访问的文件的记录。"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+            # 按 last_accessed_at 降序排序，找到最近操作过的文件
+            cursor.execute(
+                """
+                SELECT id, file_content, original_filename 
+                FROM uploaded_files 
+                WHERE user_id = %s 
+                ORDER BY last_accessed_at DESC 
+                LIMIT 1
+                """,
+                (user_id,)
+            )
+            result = cursor.fetchone()
+            
+            if result:
+                logging.info(f"MCP Server: 找到用户 {user_id} 的最近文件: '{result['original_filename']}' (ID: {result['id']})")
+                return result
+            else:
+                logging.warning(f"MCP Server: 未找到用户 {user_id} 的任何文件。")
+                return None
+    except mysql.connector.Error as e:
+        logging.error(f"MCP Server: 为用户 {user_id} 获取最近文件时出错: {e}")
+        return None
+
 # --- MCP 服务器和工具定义 ---
 mcp = FastMCP("causal-analyzer")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @mcp.tool()
-
-@mcp.tool()
-async def perform_causal_analysis(filename: str, username: str) -> str:
+async def perform_causal_analysis(username: str, filename: str = None) -> str:
     """
-    对用户上传的CSV文件执行因果分析。
+    对用户上传的CSV文件执行因果分析。如果用户没有指定文件名，会自动分析最近上传的文件。
 
     Args:
-        filename: 要分析的CSV文件的名称 (例如, 'my_data.csv')。
         username: 请求分析的用户名 (由系统自动添加)。
+        filename (可选): 要分析的CSV文件的名称 (例如, 'my_data.csv')。如果未提供，将自动分析最近上传的文件。
     
     Returns:
-        一个包含分析结果的JSON字符串。
+        一个包含分析结果的JSON字符串，成功时会包含被分析的文件名。
     """
-    logging.info(f"工具 'perform_causal_analysis' 已为用户 '{username}' 的文件 '{filename}' 调用。")
+    logging.info(f"工具 'perform_causal_analysis' 已为用户 '{username}' 的文件 '{filename or '最近文件'}' 调用。")
     try:
         user_data = find_user(username)
         if not user_data:
             return json.dumps({"success": False, "message": f"错误：用户 '{username}' 不存在。"}, ensure_ascii=False)
         user_id = user_data['id']
 
-        file_content_bytes = get_file_content_from_db(user_id, filename)
-        if file_content_bytes is None:
-            return json.dumps({"success": False, "message": f"错误：未找到文件 '{filename}'。请确认文件已上传。"}, ensure_ascii=False)
+        file_content_bytes = None
+        target_filename = None
+
+        # 1. 如果提供了文件名，则优先尝试获取它
+        if filename:
+            logging.info(f"正在为用户 {user_id} 获取指定文件: '{filename}'")
+            file_content_bytes = get_file_content_from_db(user_id, filename)
+            if file_content_bytes:
+                target_filename = filename
+            else:
+                logging.warning(f"指定文件 '{filename}' 未找到，将尝试查找最近的文件作为后备。")
+
+        # 2. 如果没有提供文件名，或者指定的文件未找到，则查找最近的文件
+        if not file_content_bytes:
+            logging.info(f"未提供文件名或指定文件未找到，正在为用户 {user_id} 查找最近文件。")
+            most_recent_file = get_recentfile(user_id)
+            if most_recent_file:
+                file_content_bytes = most_recent_file['file_content']
+                target_filename = most_recent_file['original_filename']
+                logging.info(f"已自动选择最近文件: '{target_filename}'")
+
+        # 3. 如果两种方式都找不到文件，则返回错误
+        if not file_content_bytes:
+            error_message = f"错误：未找到文件 '{filename}'。" if filename else "错误：找不到任何上传过的文件。"
+            error_message += " 请先上传一个文件或检查文件名。"
+            return json.dumps({"success": False, "message": error_message}, ensure_ascii=False)
         
+        # 4. 执行分析
         try:
             csv_data_string = file_content_bytes.decode('utf-8')
         except UnicodeDecodeError:
-            return json.dumps({"success": False, "message": f"错误：文件 '{filename}' 不是有效的 UTF-8 编码。"}, ensure_ascii=False)
+            return json.dumps({"success": False, "message": f"错误：文件 '{target_filename}' 不是有效的 UTF-8 编码。"}, ensure_ascii=False)
         
         analysis_result = run_pc_analysis(csv_data_string)
+        
+        # 在成功的结果中添加被分析的文件名，以便LLM可以告知用户
+        if analysis_result.get("success"):
+            analysis_result["analyzed_filename"] = target_filename
+
         return json.dumps(analysis_result, ensure_ascii=False)
 
     except Exception as e:
         logging.error(f"'perform_causal_analysis' 工具执行出错: {e}", exc_info=True)
         return json.dumps({"success": False, "message": f"执行工具时发生内部错误: {e}"}, ensure_ascii=False)
 
+@mcp.tool()
 async def read_file(filename: str) -> str:
     """
     读取指定文件的内容。

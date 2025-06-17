@@ -614,10 +614,11 @@ async def ai_call(text, user_id, username, session_id):
 
         # 注意：当前设计只处理第一个工具调用
         tool_call = tool_calls[0]
+        # 该工具代表调用mcp的意图
         function_name = tool_call.function.name
         function_args = json.loads(tool_call.function.arguments)
         
-        # --- 核心修改：将从 session 中获得的安全 username 传递给工具 ---
+        # --- 核心修改：将从 session 中获得的安全 username 传递给工具function_args ---
         function_args['username'] = username
         logging.info(f"调用工具 '{function_name}'，增强后参数: {function_args}")
         

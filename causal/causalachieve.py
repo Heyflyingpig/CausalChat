@@ -88,7 +88,8 @@ def run_pc_analysis(csv_data_string: str) -> dict:
             "raw_results": {
                 "edges": [str(edge).strip() for edge in edges],
                 "adjacency_matrix": cg.G.graph.tolist()
-            }
+            },
+            "analyzed_filename": None
         }
 
     except Exception as e:

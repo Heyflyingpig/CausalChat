@@ -492,16 +492,45 @@ function newChat() {
 
     console.log("正在准备新聊天界面...");
 
-    currentSessionId = null; // 标记为新会话，但不立即在后端创建
-    chatArea.innerHTML = ''; // 清空聊天区域
-    
-    // 添加一条欢迎消息
-    addMessage('ai', '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析');
-    
-    // 激活输入框，方便用户直接输入
-    document.getElementById('userInput').focus();
-    
     // 注意：后端会话将在用户发送第一条消息时创建。
+    // --- 修复：立即在后端创建新会话 ---
+    handleNewChatRequest();
+}
+
+async function handleNewChatRequest() {
+    if (!currentUsername) {
+        showError("请先登录！");
+        return;
+    }
+
+    console.log("正在为新聊天创建会话...");
+    chatArea.innerHTML = '<div class="loading-spinner"></div>'; // 显示加载动画
+
+    try {
+        const response = await fetch('/api/new_chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+
+        const data = await response.json();
+        chatArea.innerHTML = ''; // 清除加载动画
+
+        if (data.success) {
+            currentSessionId = data.new_session_id;
+            console.log(`新会话已创建: ${currentSessionId}`);
+            
+            addMessage('ai', '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析');
+            document.getElementById('userInput').focus();
+
+            await loadHistory(); // 重新加载历史列表以显示新会话
+        } else {
+            showError(data.error || "创建新对话失败。");
+        }
+    } catch (error) {
+        chatArea.innerHTML = ''; // 确保出错时也移除加载动画
+        showError("创建新对话时发生网络错误。");
+        console.error("创建新对话错误:", error);
+    }
 }
 
 // 更新会话标题
