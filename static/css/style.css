@@ -165,7 +165,7 @@
         color: rgba(0, 0, 0, 0.06); /* 非常淡的颜色，使其不干扰阅读 */
         z-index: 0; /* 确保水印在消息气泡的下方 */
         pointer-events: none; /* 让水印不响应任何鼠标事件（如点击、悬停） */
-        user-select: none; /* 防止用户意外选中文本 */
+
     }
     .session-info {
         /* 列表项中包含时间和日期的信息容器 */
@@ -245,6 +245,7 @@
         word-break: break-word; /* 长单词或URL自动换行 */
         line-height: 1.4; /* 行高，增加可读性 */
         width: 100%; /* 占满.message容器 */
+        user-select: text; /* 新增：确保在所有环境中都可以选中文本 */
     }
 
     /* 用户消息样式 */
