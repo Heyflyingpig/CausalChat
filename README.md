@@ -141,8 +141,8 @@ python Run_causal.py
 ├── database_init.py      # 数据库初始化(需要自行运行)
 ├── secrets.json          # 配置模板 (需自行创建 secrets.json)
 ├── settinging/           # 设置项
-│   ├── Userprivacy.txt   # 用户隐私协议
-│   ├── manual.txt        # 用户手册
+│   ├── Userprivacy.md   # 用户隐私协议
+│   ├── manual.md        # 用户手册
 ├── Document/             # 文档
 │   ├── Database_NOTES.md # 数据库说明
 ├── causal/               # 因果推断算法模块
@@ -236,4 +236,5 @@ python Run_causal.py
 - 【BUG修复】【前端】：修复了按下文件名之后，清空输入框的问题
 ---
 2025.6.21
-- 【内容新增】【前端】：前端设置页面的md格式支持
+- 【内容新增】【前端】：设置页面的md格式支持
+- 【内容新增】【前端】：消息支持复制
