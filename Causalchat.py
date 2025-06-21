@@ -1037,8 +1037,8 @@ def setting():
     topic = request.args.get('topic') # 从查询参数获取 topic
     request.args.get('topic')
     topic_to_file = {
-            "userAgreement": "Userprivacy.txt",
-            "userManual": "manual.txt"
+            "userAgreement": "Userprivacy.md",
+            "userManual": "manual.md"
         }
     filename = topic_to_file.get(topic)
     file_path = os.path.join(SETTING_DIR, filename)

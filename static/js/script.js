@@ -290,7 +290,7 @@ async function handleSettingOption(optionId) {
         if (data.success && data.messages) {
             console.log("成功获取设置内容");
             
-            settingContentDisplay.textContent = data.messages;
+            settingContentDisplay.innerHTML = marked.parse(data.messages);
 
         } else {
             console.error("获取设置内容失败:", data.error);
@@ -1118,6 +1118,7 @@ function addMessage(sender, messageData, isLoading = false) {
                 }
 
                 // 2. 创建并渲染因果图
+                // 生成唯一id，防止id重复
                 const graphContainerId = `graph-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
                 const graphContainer = document.createElement('div');
                 graphContainer.id = graphContainerId;
