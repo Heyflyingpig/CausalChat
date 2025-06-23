@@ -46,7 +46,6 @@ os.makedirs(os.path.join(BASE_DIR, 'static', 'generated_graphs'), exist_ok=True)
 SETTING_DIR = os.path.join(BASE_DIR, "setting")
 
 DATABASE_PATH = None # <-- 修改：不再直接使用 SQLite 文件路径
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 SECRETS_PATH = os.path.join(BASE_DIR, "secrets.json")
 
 # --- 修改：全局状态管理 ---
@@ -137,40 +136,6 @@ def load_api_config():
 load_api_config()
 
 
-def load_config():
-    """从 config.json 加载配置"""
-    try:
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                config_data = json.load(f)
-                return config_data
-        else:
-            logging.info(f"配置文件 {CONFIG_PATH} 不存在，将创建。")
-            # 文件不存在，返回默认空配置
-            return {} # 返回一个空字典或包含其他非用户配置的字典
-    except (json.JSONDecodeError, IOError) as e:
-        logging.error(f"读取配置文件 {CONFIG_PATH} 时出错: {e}。将使用默认配置。")
-        # 文件损坏或读取错误，同样返回默认
-        return {}
-
-def save_config(config_data):
-    """将配置数据保存到 config.json"""
-    try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            # --- 移除：确保不保存用户信息 ---
-            # 我们从 config_data 中移除 logged_in_user (如果存在)，以防旧代码调用
-            config_data.pop("logged_in_user", None)
-            # --------------------------------
-            json.dump(config_data, f, indent=4, ensure_ascii=False)
-        logging.info(f"配置已保存到 {CONFIG_PATH}")
-    except IOError as e:
-        logging.error(f"保存配置文件 {CONFIG_PATH} 时出错: {e}")
-
-# --- 程序启动时加载配置 ---
-config = load_config()
-
-
-# --- 修改：数据库辅助函数 ---
 def get_db_connection():
     """创建并返回一个 MySQL 数据库连接。"""
     try:
@@ -310,7 +275,7 @@ def register_user(username, hashed_password):
         logging.error(f"注册用户 '{username}' 时发生未知错误: {e}")
         return False, "注册过程中发生服务器错误。"
 
-def get_chat_history(session_id: str, user_id: int, limit: int = 100) -> list:
+def get_chat_history(session_id: str, user_id: int, limit: int = 20) -> list:
     """从数据库获取指定会话的最近聊天记录。"""
     history = []
     try:
@@ -1184,6 +1149,5 @@ if __name__ == '__main__':
         logging.critical("MCP 初始化完成但会话无效。应用即将退出。")
         sys.exit(1)
         
-    logging.info("MCP 服务已就绪，启动 Flask Web 服务器...")
-    app.run(host='127.0.0.1', port=5001, debug=True, use_reloader=False)
+
     
