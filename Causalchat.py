@@ -1149,5 +1149,10 @@ if __name__ == '__main__':
         logging.critical("MCP 初始化完成但会话无效。应用即将退出。")
         sys.exit(1)
         
+    logging.info("MCP 连接就绪，启动 Flask 应用服务器...")
+    # 启动 Flask 应用
+    # use_reloader=False 是必须的，因为重载器会启动一个子进程，
+    # 这会干扰我们已经手动管理的 MCP 子进程和事件循环。
+    app.run(host='127.0.0.1', port=5001, debug=True, use_reloader=False)
 
     

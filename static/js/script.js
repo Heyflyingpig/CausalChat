@@ -8,9 +8,9 @@ const userAvatar = document.getElementById('userAvatar'); //头像
 const userInfoPopup = document.getElementById('userInfoPopup');
 const userInfoContent = document.getElementById('userInfoContent');
 const historyList = document.getElementById('historyList'); // 获取 historyList 元素
-const fileList = document.getElementById('fileList'); // --- 新增: 获取 fileList 元素
+const fileList = document.getElementById('fileList'); // ---  获取 fileList 元素
 const settingPopup = document.getElementById('settingPopup'); // 获取设置
-const settingOptions = document.getElementById('settingOptions'); // 新增：获取设置选项容器
+const settingOptions = document.getElementById('settingOptions'); // 获取设置选项容器
 const settingContentDisplay = document.getElementById('settingContentDisplay'); // 获取内容显示区域
 const backToSettingsButton = document.getElementById('backToSettingsButton'); // 获取返回按钮
 const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上传器
@@ -464,10 +464,8 @@ async function sendMessage() {
         if (data.success) {
             // The new addMessage function can handle both structured and plain text responses
             addMessage('ai', data.response);
-            // --- 新增：在消息成功保存后（标题已更新），再加载历史记录 ---
-            if (isNewSession) {
-                loadHistory();
-            }
+            // --- 修改：在消息成功保存后，总是重新加载历史记录以更新时间和排序 ---
+            loadHistory();
         } else {
             showError(data.error || '从服务器获取响应失败。');
         }
