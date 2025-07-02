@@ -398,6 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function sendMessage() {
     const userInput = document.getElementById('userInput');
+    const sendButton = document.getElementById('sendButton'); // 新增：获取发送按钮
     const message = userInput.value.trim();
     const isNewSession = !currentSessionId; // --- 新增：在开始时检查这是否是一个新会话 ---
 
@@ -411,7 +412,7 @@ async function sendMessage() {
     }
 
     // 如果是新对话，先在后端创建会话
-    if (!currentSessionId) {
+    if (isNewSession) {
         console.log("检测到新对话，正在后端创建会话...");
         try {
             const response = await fetch('/api/new_chat', {
@@ -438,6 +439,11 @@ async function sendMessage() {
     addMessage('user', message);
     userInput.value = ''; // 清空输入框
 
+    // --- 新增：禁用输入和发送按钮 ---
+    userInput.disabled = true;
+    sendButton.disabled = true;
+    // --------------------------------
+
     const loadingBubble = addMessage('ai', '', true);
 
     try {
@@ -462,7 +468,7 @@ async function sendMessage() {
         const data = await response.json();
 
         if (data.success) {
-            // The new addMessage function can handle both structured and plain text responses
+
             addMessage('ai', data.response);
             // --- 修改：在消息成功保存后，总是重新加载历史记录以更新时间和排序 ---
             loadHistory();
@@ -476,6 +482,11 @@ async function sendMessage() {
         }
         console.error("发送消息时出错:", error);
         showError('发送消息时发生网络错误。');
+    } finally {
+        // --- 新增：无论成功或失败，都重新启用输入和发送按钮 ---
+        userInput.disabled = false;
+        sendButton.disabled = false;
+        userInput.focus(); // 重新聚焦到输入框，方便用户继续输入
     }
 }
 
@@ -1104,7 +1115,7 @@ function addMessage(sender, messageData, isLoading = false) {
         }
         contentElement.appendChild(loadingDots);
     } else {
-        // --- 核心修改：处理不同类型的 messageData ---
+
         if (sender === 'ai' && typeof messageData === 'object' && messageData !== null) {
             // 处理AI的结构化响应
             if (messageData.type === 'causal_graph' && messageData.data) {
@@ -1140,7 +1151,7 @@ function addMessage(sender, messageData, isLoading = false) {
             // 对于用户消息（总是字符串）和旧的纯文本AI消息
             contentElement.innerHTML = marked.parse(messageData.toString());
         }
-        // --- 修改结束 ---
+
     }
     
     // 直接添加内容元素，不需要头像
