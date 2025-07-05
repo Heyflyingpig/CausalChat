@@ -142,7 +142,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 @mcp.tool()
 async def perform_causal_analysis(username: str, filename: str = None) -> str:
     """
-    对用户上传的CSV文件执行因果分析。如果用户没有指定文件名，会自动分析最近上传的文件。
+    对用户上传的CSV文件执行因果分析。当用户请求进行分析、重新分析、或再次执行分析时，都应调用此工具。如果用户没有指定文件名，会自动分析最近上传的文件。
 
     Args:
         username: 请求分析的用户名 (由系统自动添加)。

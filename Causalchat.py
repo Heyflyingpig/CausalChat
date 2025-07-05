@@ -40,12 +40,10 @@ app.secret_key = None
 # ------------------------------------
 
 BASE_DIR = os.path.dirname(__file__)
-# --- 新增：确保图表目录存在 ---
+#这里是创建文件makedirs，后面的参数意思是确定文件目录存在
 os.makedirs(os.path.join(BASE_DIR, 'static', 'generated_graphs'), exist_ok=True)
 # -----------------------------
 SETTING_DIR = os.path.join(BASE_DIR, "setting")
-
-DATABASE_PATH = None # <-- 修改：不再直接使用 SQLite 文件路径
 SECRETS_PATH = os.path.join(BASE_DIR, "secrets.json")
 
 # --- 修改：全局状态管理 ---
@@ -228,6 +226,7 @@ except Exception as e:
 # 查找用户
 def find_user(username):
     try:
+        # with提供一个临时变量，储存这个函数
         with get_db_connection() as conn:
             # 使用 dictionary=True 使 cursor 返回字典而不是元组，方便按列名访问
             cursor = conn.cursor(dictionary=True)
@@ -240,7 +239,7 @@ def find_user(username):
                 # 返回一个字典，包含 id, username 和 password_hash
                 return user_row # user_row 已经是字典了
             return None
-    except mysql.connector.Error as e: # <-- 修改异常类型
+    except mysql.connector.Error as e: 
         logging.error(f"查找用户 '{username}' 时数据库出错: {e}")
         return None
     except Exception as e:
@@ -266,6 +265,7 @@ def register_user(username, hashed_password):
         return True, "注册成功！"
     except mysql.connector.Error as e: # <-- 修改异常类型
         # MySQL 的 IntegrityError 对于 UNIQUE 约束冲突通常是 ER_DUP_ENTRY (errno 1062)
+        # 这里对应的是mysql报错文档
         if e.errno == errorcode.ER_DUP_ENTRY:
             logging.warning(f"尝试注册已存在的用户名 (数据库约束): {username}")
             return False, "用户名已被注册。"
@@ -275,13 +275,17 @@ def register_user(username, hashed_password):
         logging.error(f"注册用户 '{username}' 时发生未知错误: {e}")
         return False, "注册过程中发生服务器错误。"
 
-def get_chat_history(session_id: str, user_id: int, limit: int = 20) -> list:
+def get_chat_history(session_id: str, user_id: int, limit: int) -> list:
     """从数据库获取指定会话的最近聊天记录。"""
     history = []
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor(dictionary=True)
             # 获取最近的 'limit' 条记录
+            # 为什么这里需要先反转，再反转排序呢？
+            # 我需要获取一个子集，也就是所有记录中的最新的子集，然后在从老到新进行排序
+            # 最后通过一个append,从老到新进行添加
+            
             cursor.execute("""
                 SELECT message_type, content FROM chat_messages
                 WHERE session_id = %s AND user_id = %s
@@ -305,7 +309,7 @@ def get_chat_history(session_id: str, user_id: int, limit: int = 20) -> list:
         logging.error(f"为会话 {session_id} 获取历史记录时发生未知错误: {e}")
         return []
 
-# 获取注册值
+# 获取注册值,检查注册值
 @app.route('/api/register', methods=['POST'])
 def handle_register():
     data = request.json
@@ -329,7 +333,7 @@ def handle_register():
     else:
         return jsonify({'success': False, 'error': message}), 400 # 用户名已存在等是客户端错误
 
-
+# 检查登录值
 @app.route('/api/login', methods=['POST'])
 def handle_login():
     # --- 重构：使用 Flask Session 进行会话管理 ---
@@ -357,7 +361,6 @@ def handle_login():
         session['user_id'] = user_data['id']
         session['username'] = user_data['username']
         # Session 会自动通过浏览器 cookie 维护状态，不再需要文件
-        # -----------------------------------------
         
         return jsonify({'success': True, 'username': username})
     else:
@@ -459,13 +462,11 @@ def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Eve
     logging.info("后台事件循环已启动，MCP 初始化任务已安排。")
     loop.run_forever()
 
-# --- 重构结束 ---
 
-
-# 利用flask的jsonify的框架，将后端处理转发到前端
+# 获取发送的各种值
 @app.route('/api/send', methods=['POST'])
 def handle_message():
-    # --- 重构：从 Session 获取用户身份 ---
+    # --- 从 Session 获取用户身份 ---
     from flask import session
     if 'user_id' not in session or 'username' not in session:
         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
@@ -485,7 +486,7 @@ def handle_message():
     logging.info(f"用户 {username} (ID: {user_id}) 在会话 {session_id} 中发送消息: {user_input[:50]}...")
 
     try:
-        # --- 核心修改：将 session_id 传递给 ai_call ---
+        # 等待异步操作完成
         future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username, session_id), background_loop)
         response = future.result()  # 这会阻塞当前线程直到异步任务完成
 
@@ -663,6 +664,8 @@ def save_chat(user_id, session_id, user_msg, ai_response):
             attachment_type = 'other'
 
             if isinstance(ai_response, dict):
+                # 请尝试从 ai_response 字典里获取 'summary' 的内容。如果成功获取到了，就把它赋值给 ai_content。
+                # 如果没找到 'summary' 这个键，那就把整个 ai_response 字典转换成一个JSON字符串
                 ai_content = ai_response.get('summary', json.dumps(ai_response, ensure_ascii=False))
                 if ai_response.get('type') == 'causal_graph' and 'data' in ai_response:
                     has_attachment = True
@@ -715,7 +718,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
         logging.error(f"保存聊天时发生未知错误: {e}")
 
 
-# 会话管理接口 (**修改：** 过滤用户)
+# 会话管理接口,获取会话
 @app.route('/api/sessions')
 def get_sessions():
     from flask import session
@@ -744,7 +747,7 @@ def get_sessions():
         # 格式化以适应前端期望的 (id, {preview, last_time}) 结构
         session_list_for_frontend = [
             (
-                row["id"], 
+                 ["id"], 
                 {
                     "preview": row["title"], 
                     "last_time": row["last_activity_at"].strftime("%m-%d %H:%M")
@@ -825,6 +828,7 @@ def load_session_content():
                 return jsonify({"success": False, "error": "无法加载该会话或会话不存在"}), 404
 
             # 获取所有消息，并左连接附件表
+            # 这里的 cm 是 chat_messages 表的别名,ca 是 chat_attachments 表的别名
             cursor.execute("""
                 SELECT 
                     cm.id, cm.message_type, cm.content, cm.has_attachment,
@@ -1128,6 +1132,7 @@ if __name__ == '__main__':
     # --- 启动后台事件循环并等待 MCP 就绪 ---
     mcp_ready_event = threading.Event()
     
+    ## 后台线程
     background_event_loop = asyncio.new_event_loop()
     loop_thread = threading.Thread(
         target=start_event_loop, 
