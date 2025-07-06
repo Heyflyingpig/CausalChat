@@ -11,13 +11,23 @@ import logging
 import json 
 import asyncio
 import atexit
-import subprocess
 import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
 import threading
 import hashlib
+
+
+# --- 新增：LangChain Agent 相关导入 ---
+from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.tools import BaseTool
+from typing import Any, Type, List
+from pydantic import BaseModel, create_model
+# ------------------------------------
 
 # --- 新增：为 Windows 设置 asyncio 事件循环策略 ---
 # 在 Windows 上，默认的 asyncio 事件循环 (SelectorEventLoop) 不支持子进程。
@@ -309,6 +319,8 @@ def get_chat_history(session_id: str, user_id: int, limit: int) -> list:
         logging.error(f"为会话 {session_id} 获取历史记录时发生未知错误: {e}")
         return []
 
+
+
 # 获取注册值,检查注册值
 @app.route('/api/register', methods=['POST'])
 def handle_register():
@@ -525,109 +537,198 @@ def new_chat():
         logging.error(f"为用户 {username} 创建新会话时数据库出错: {e}")
         return jsonify({'success': False, 'error': '创建新会话失败'}), 500
 
-# --- 核心修改：重构 ai_call 函数以使用持久连接 ---
+# --- 新增：LangChain Agent 的 MCP 工具封装 ---
+# 这里是对mcp格式的langchain翻译，翻译成一个类
+
+def create_pydantic(schema: dict, model_name: str) -> Type[BaseModel]:
+    """
+    根据 MCP 工具提供的 JSON Schema 动态创建 Pydantic 模型。
+    这是让 LangChain Agent 理解工具参数的关键。
+    """
+    fields = {}
+    properties = schema.get('properties', {})
+    required_fields = schema.get('required', [])
+
+    for prop_name, prop_schema in properties.items():
+        # 这里对类型做了简化映射，可以根据未来工具的复杂性进行扩展
+        field_type: Type[Any] = str  # 默认为字符串类型
+        if prop_schema.get('type') == 'integer':
+            field_type = int
+        elif prop_schema.get('type') == 'number':
+            field_type = float
+        elif prop_schema.get('type') == 'boolean':
+            field_type = bool
+        
+        # Pydantic 的 create_model 需要一个元组: (类型, 默认值)
+        # 对于必需字段，默认值是 ... (Ellipsis)
+        if prop_name in required_fields:
+            fields[prop_name] = (field_type, ...)
+        else:
+            fields[prop_name] = (field_type, None)
+    
+    # 使用 Pydantic 的 create_model 动态创建模型类
+    return create_model(model_name, **fields)
+
+class McpTool(BaseTool):
+    """
+    一个自定义的 LangChain 工具 (BaseTool)，用于封装 MCP 会话的工具调用功能。
+    它充当了 LangChain Agent 和我们现有 MCP 服务之间的桥梁。
+    """
+    name: str
+    description: str
+    args_schema: Type[BaseModel]  # 强制工具必须有参数结构
+    session: "ClientSession"      # 类型前向引用
+    username: str
+
+    def _run(self, *args: Any, **kwargs: Any) -> Any:
+        # 我们所有的工具都是异步的，所以同步执行方法直接报错
+        raise NotImplementedError("McpTool 不支持同步执行。")
+ # mcp定于的异步执行方法 _arun表示这个方法可以接收任意数量的关键字参数，并将它们收集到一个名为 kwargs 的字典中
+    async def _arun(self, **kwargs: Any) -> Any:
+        """
+        通过 MCP 会话异步执行工具。
+        Agent Executor 会将从 LLM 获取的参数作为关键字参数传递到这里。
+        """
+        # 将 MCP server 工具所需的 'username' 参数补充进去
+        kwargs['username'] = self.username
+        logging.info(f"LangChain Agent 正在调用工具 '{self.name}'，参数: {kwargs}")
+        
+        # 通过已建立的 mcp_session 调用真实的工具
+        # 相当于调用mcp
+        response_obj = await self.session.call_tool(self.name, kwargs)
+        
+        # 提取文本内容并返回给 Agent
+        function_response_text = response_obj.content[0].text
+        logging.debug(f"工具 '{self.name}' 返回了原始数据 (前200字符): {function_response_text[:200]}...")
+        
+        return function_response_text
+
+
+
+# --- 核心修改：重构 ai_call 函数以使用 LangChain Agent ---
 async def ai_call(text, user_id, username, session_id):
     """
-    使用全局持久化的 MCP 会话与 LLM 交互并调用工具。
-    不再在每次调用时创建或销毁连接。
+    使用 LangChain Agent 与 LLM 交互并调用工具。
+    Agent 会自动处理工具选择、执行和结果总结的循环。
     """
-    # --- 修改：上下文获取逻辑现在直接使用传入的 session_id ---
-    history_messages = get_chat_history(session_id, user_id, limit=20)
-    # ----------------------------------------------------
-
-    client = OpenAI(base_url=BASE_URL, api_key=apikey)
+    history_messages_raw = get_chat_history(session_id, user_id, limit=20)
     
-    # 检查MCP会话是否在启动时成功建立
-    if not mcp_session:
-        logging.error("ai_call: MCP会话不可用。将作为普通聊天继续，不使用工具。")
-        
+    # 检查MCP会话是否在启动时成功建立，如果失败则回退到普通聊天模式
+    if not mcp_session or not mcp_tools:
+        logging.error("ai_call: MCP会话或工具不可用。将作为普通聊天继续，不使用工具。")
+        client = OpenAI(base_url=BASE_URL, api_key=apikey)
         messages = [{"role": "system", "content": "你是一个有用的工程师助手，请根据上下文进行回复。"}]
-        messages.extend(history_messages)
+        messages.extend(history_messages_raw)
         messages.append({"role": "user", "content": text})
         
-        response = client.chat.completions.create(
-            model=current_model,
-            messages=messages
-        )
-        # 保证返回格式一致
+        response = client.chat.completions.create(model=current_model, messages=messages)
         return {"type": "text", "summary": response.choices[0].message.content}
 
-    # ---- 使用已建立的会话 ----
-    messages = [
-        {"role": "system", "content": "你是一个有用的工程师助手，可以使用工具来获取额外信息。"
-        "你的主要任务是分析工具返回的JSON数据，并以详细的自然语言（根据用户给你的语言风格）向用户总结关键发现。"
-        "现在有一下几个要求：1.不要在你的回答中逐字重复整个JSON数据。请根据上下文进行回复。2. 请使用Markdown格式（例如，使用项目符号、加粗、表格等）来组织你的回答 3. 回答需要依照因果推断相关的知识和术语进行回答"},
-    ]
-    messages.extend(history_messages)
-    messages.append({"role": "user", "content": text})
+    # 1. 初始化 LangChain 的 LLM 封装
 
-    # 第一次调用
-    # 这里可选择是否调用MCP，未来可添加功能
-    logging.info(f"ai_call: 首次调用 LLM，包含 {len(history_messages)} 条历史消息...")
-    response = client.chat.completions.create(
+    # ----------------------------------------------------------------
+    llm = ChatOpenAI(
         model=current_model,
-        messages=messages,
-        tools=mcp_tools or None,
-        tool_choice="auto",
+        base_url=BASE_URL,
+        api_key=apikey,
+        temperature=0,
+        streaming=False,
     )
 
-    response_message = response.choices[0].message
-    tool_calls = response_message.tool_calls
-
-    if tool_calls:
-        logging.info(f"LLM 决定调用工具: {[call.function.name for call in tool_calls]}")
-        messages.append(response_message)
-
-        # 注意：当前设计只处理第一个工具调用
-        tool_call = tool_calls[0]
-        # 该工具代表调用mcp的意图
-        function_name = tool_call.function.name
-        function_args = json.loads(tool_call.function.arguments)
+    # 2. 从 mcp_tools 动态创建 LangChain 工具列表
+    # 必须是定义为langchain的工具列表
+    langchain_tools: List[BaseTool] = []
+    for tool_def in mcp_tools:
+        func_info = tool_def["function"]
+        # 为动态创建的 Pydantic 模型生成一个唯一的类名
+        model_name = f"{func_info['name'].replace('_', ' ').title().replace(' ', '')}Input"
+        args_schema = create_pydantic(func_info["parameters"], model_name)
         
-        # --- 核心修改：将从 session 中获得的安全 username 传递给工具function_args ---
-        function_args['username'] = username
-        logging.info(f"调用工具 '{function_name}'，增强后参数: {function_args}")
-        
-        function_response_obj = await mcp_session.call_tool(function_name, function_args)
-        function_response_text = function_response_obj.content[0].text
-        
-        messages.append({
-            "tool_call_id": tool_call.id,
-            "role": "tool",
-            "name": function_name,
-            "content": function_response_text,
-        })
-        
-        # 第二次调用，让LLM总结工具结果
-        logging.info("ai_call: 携带工具结果，再次调用 LLM...")
-        second_response = client.chat.completions.create(
-            model=current_model,
-            messages=messages,
+        langchain_tool = McpTool(
+            name=func_info["name"],
+            description=func_info["description"],
+            args_schema=args_schema,
+            session=mcp_session,
+            username=username
         )
-        summary_text = second_response.choices[0].message.content
+        langchain_tools.append(langchain_tool)
 
-        # 如果是因果分析工具，则返回结构化数据
-        if function_name == 'perform_causal_analysis':
+    # 3. 创建 Agent 的提示模板
+    # 这个模板指导 Agent 如何行动，并定义了输入变量
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "你是一个有用的工程师助手，可以使用工具来获取额外信息。"
+                   "你的主要任务是分析工具返回的JSON数据，并以详细的自然语言（根据用户给你的语言风格）向用户总结关键发现。"
+                   "现在有一下几个要求：1.不要在你的回答中逐字重复整个JSON数据。请根据上下文进行回复。2. 请使用Markdown格式（例如，使用项目符号、加粗、表格等）来组织你的回答 3. 回答需要依照因果推断相关的知识和术语进行回答"),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad"), # Agent 内部工作空间
+    ])
+
+    # 4. 创建 Agent
+    # 我们使用 create_openai_tools_agent，它专门用于能调用工具的 OpenAI 模型
+    agent = create_openai_tools_agent(llm, langchain_tools, prompt)
+
+    # 5. 创建 Agent 执行器
+    # AgentExecutor 负责运行 Agent 的整个思考-行动-观察的循环
+    # --- 最终修复：显式启用中间步骤的返回 ---
+    # 新版 LangChain 中，AgentExecutor 默认不返回 intermediate_steps。
+    # 我们必须将 return_intermediate_steps=True 设置为 True，
+    # 才能在响应中获取工具调用的详细过程，从而正确地提取因果图数据。
+    agent_executor = AgentExecutor(
+        agent=agent, 
+        tools=langchain_tools, 
+        verbose=True, # verbose=True 会在日志中打印 Agent 的思考过程
+        return_intermediate_steps=True # 打印中间的工具调用步骤
+    )
+
+    # 6. 转换历史消息格式并调用 Agent
+    # LangChain Agent 需要特定的消息格式 (HumanMessage, AIMessage)
+    chat_history = [
+        HumanMessage(content=msg["content"]) if msg["role"] == "user" 
+        else AIMessage(content=msg["content"]) 
+        for msg in history_messages_raw
+    ]
+
+    logging.info(f"正在为用户 {username} 调用 LangChain Agent...")
+    agent_response = await agent_executor.ainvoke({
+        "input": text,
+        "chat_history": chat_history
+    })
+
+    # --- 新增：调试日志，打印完整的 Agent 响应结构 ---
+    logging.info(f"完整的 Agent 响应: {agent_response}")
+    # ------------------------------------------------
+
+    # 7. 处理和格式化最终响应
+    final_output_summary = agent_response.get("output", "抱歉，我在处理时遇到了问题。")
+    
+    # 为了保持与前端的兼容性，我们需要检查是否是因果图的响应
+    # 这需要从 Agent 的中间步骤中获取原始的工具输出
+    intermediate_steps = agent_response.get("intermediate_steps", [])
+    if intermediate_steps:
+        # 获取最后一个工具调用的动作和观察结果
+        last_action, last_observation = intermediate_steps[-1]
+        last_tool_name = last_action.tool
+        
+        # 如果最后一个工具是因果分析，我们特殊处理它
+        if last_tool_name == 'perform_causal_analysis':
             try:
-                analysis_data = json.loads(function_response_text)
+                # last_observation 是从 McpTool 返回的原始 JSON 字符串
+                analysis_data = json.loads(last_observation)
                 if analysis_data.get("success"):
-                    logging.info("因果分析成功，返回结构化数据和总结。")
+                    logging.info("因果分析工具成功执行，返回结构化数据和 Agent 的总结。")
+                    # 返回与旧版 `ai_call` 兼容的结构
                     return {
                         "type": "causal_graph",
-                        "summary": summary_text,
-                        "data": analysis_data.get("data")
+                        "summary": final_output_summary,  # 这是 Agent 生成的最终总结
+                        "data": analysis_data.get("data") # 这是工具返回的原始绘图数据
                     }
             except json.JSONDecodeError:
-                logging.error("无法解析来自因果分析工具的JSON响应。")
-        
-        # 对于其他工具或失败的分析，只返回文本总结
-        logging.info("返回纯文本总结。")
-        return {"type": "text", "summary": summary_text}
+                logging.error("无法解析来自因果分析工具的JSON响应。将返回纯文本总结。")
 
-    else:
-        logging.info("ai_call: LLM 未调用工具，直接返回。")
-        # 保证返回格式一致
-        return {"type": "text", "summary": response_message.content}
+    # 对于普通聊天或其它工具的调用，直接返回 Agent 的总结
+    logging.info("返回纯文本总结。")
+    return {"type": "text", "summary": final_output_summary}
 
 
 ## 保存历史文件 ( 添加 user_id 参数和列)
@@ -747,7 +848,7 @@ def get_sessions():
         # 格式化以适应前端期望的 (id, {preview, last_time}) 结构
         session_list_for_frontend = [
             (
-                 ["id"], 
+                row["id"], 
                 {
                     "preview": row["title"], 
                     "last_time": row["last_activity_at"].strftime("%m-%d %H:%M")
