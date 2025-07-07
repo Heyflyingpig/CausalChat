@@ -11,6 +11,7 @@
 - **Lngchain架构**: langchain架构，支持良好的拓展性
 - **agent智能体**: 全面支持agent智能体结构，使ai回复更加智能，对报告分析更加准确
 - **模块化工具架构 (MCP)**: 采用先进的 MCP 架构，将核心对话逻辑与因果分析等工具解耦。这使得添加新工具、新算法变得轻而易举，具有极高的可扩展性。
+- **RAG和知识向量库的构建**：采用专业的知识向量库查询，对专业知识有更加专业，严谨的理解。
 - **安全的多用户环境**: 完整的用户注册、登录与会话管理系统，所有用户数据（聊天记录、上传文件）均通过用户ID进行严格隔离，确保数据安全。
 - **跨平台桌面应用**: 通过 `pywebview` 将 Web 应用打包成独立的桌面客户端，为用户提供一致、流畅的跨平台（Windows/macOS/Linux）体验。
 
@@ -20,16 +21,17 @@
 - **前端**: HTML, CSS, JavaScript, jQuery, Vis-network.js 
 - **数据库**: MySQL
 - **应用封装**: pywebview
-- **核心架构**: CausalChat-MCP (Method Call Protocol)，agent，Langchian
+- **核心架构**: CausalChat-MCP (Method Call Protocol)，agent，Langchian,RAG
 - **AI 模型**: 支持 OpenAI 或其他兼容的 API
 
 ## 核心功能
 
 - **文件上传**: 支持用户上传 CSV 数据集用于分析。
-- **因果分析**: 可由 LLM 自动调用后端因果发现算法（如 PC 算法）。
+- **因果分析**: 可由 LLM 自动调用后端因果发现算法。
+- **专业报告**：依据自构建的知识向量库，和rag检索增强生成专业的报告
 - **交互式图表**: 将因果关系渲染为可交互、可缩放的动态网络图。
 - **上下文理解**: LLM 具备多轮对话记忆，能够联系上下文进行分析。
-- **结构化数据存储**: 支持将分析生成的因果图等结构化数据存入数据库，并在加载历史记录时完美复现。
+
 
 ## 项目使用
 项目正在开发，目前还不支持直接使用，只能通过fork使用。
@@ -110,6 +112,10 @@ python Run_causal.py
 
 稍等片刻，一个标题为 "CausalChat" 的桌面应用窗口将会出现，并加载应用的登录界面。现在，你可以注册并开始使用了。
 
+### 4. rag和知识库部分
+目前知识库仍然在迭代，代码库中不存在该部分知识库
+目前项目使用的是bge-small-zh-v1.5嵌入模型，支持txt，pdf构建，模型放置在knowledge文件夹下的models文件夹:./knowledge/models
+如果需要使用自购键知识库，只需要在./knowledge/db文件夹下防放置即可
 
 ## linux部署（目前暂不支持）
 
@@ -143,10 +149,14 @@ python Run_causal.py
 ├── requirements.txt      # Python 依赖
 ├── README.md             # 项目说明
 ├── database_init.py      # 数据库初始化(需要自行运行)
-├── secrets.json          # 配置模板 (需自行创建 secrets.json)
-├── settinging/           # 设置项
-│   ├── Userprivacy.md   # 用户隐私协议
-│   ├── manual.md        # 用户手册
+├── secrets.json          # 配置模板 (需自行创建 secrets.json)、
+├── knowledge             # 知识库
+│   ├── build_knowledge.py# 构建知识库
+│   ├── db                # 知识库存放位置
+│   ├── models            # 嵌入模型
+├── setting/              # 设置项
+│   ├── Userprivacy.md    # 用户隐私协议
+│   ├── manual.md         # 用户手册
 ├── Document/             # 文档
 │   ├── Database_NOTES.md # 数据库说明
 ├── causal/               # 因果推断算法模块
@@ -254,3 +264,7 @@ python Run_causal.py
 ---
 2025.7.6
 - 【内容新增】【后端】：重置与ai交互逻辑，新增agent智能体和langchain架构，对mcp进行重新架构升级，对参数接口进行统一，现在回复是基于agent啦
+
+---
+2025.7.7
+- 【内容新增】【后端】：系统完美集成了rag和mcp功能，生成报告的时候会查询知识库，生成一份更加详细的报告了
