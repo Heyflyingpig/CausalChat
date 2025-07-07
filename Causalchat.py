@@ -26,7 +26,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.tools import BaseTool
 from typing import Any, Type, List
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, create_model, Field
+from langchain.schema.runnable import RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+from langchain_community.vectorstores import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 # ------------------------------------
 
 # --- 新增：为 Windows 设置 asyncio 事件循环策略 ---
@@ -57,11 +61,13 @@ SETTING_DIR = os.path.join(BASE_DIR, "setting")
 SECRETS_PATH = os.path.join(BASE_DIR, "secrets.json")
 
 # --- 修改：全局状态管理 ---
-# 将 MCP 和事件循环相关的状态集中管理
+# 将 MCP 和事件循环,llm和rag链的相关的状态集中管理
 mcp_session: ClientSession | None = None
 mcp_tools: list = []
 mcp_process_stack = AsyncExitStack()
 background_loop: asyncio.AbstractEventLoop | None = None
+rag_chain = None
+llm = None
 # -------------------------
 
 
@@ -86,7 +92,7 @@ def load_api_config():
         # --- 新增：添加 SECRET_KEY 到必需列表 ---
         required_keys_app = ["SECRET_KEY"]
         # ------------------------------------
-        required_keys_zhipu = ["API_KEY", "BASE_URL", "MODEL"] # 假设你的 secrets.json 用的是这些键
+        required_keys = ["API_KEY", "BASE_URL", "MODEL"] # 假设你的 secrets.json 用的是这些键
         required_keys_db = ["MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"]
 
         try:
@@ -102,8 +108,9 @@ def load_api_config():
                     app.secret_key = secrets_data["SECRET_KEY"]
                     # ----------------------------------
 
-                    # 检查并加载智谱AI配置
-                    for key in required_keys_zhipu:
+
+                    # 检查并加载AI配置
+                    for key in required_keys:
                         if key not in secrets_data:
                             logging.error(f"关键配置 '{key}' 未在 {SECRETS_PATH} 中找到。")
                             raise ValueError(f"配置错误: {SECRETS_PATH} 中缺少 '{key}'")
@@ -142,6 +149,25 @@ def load_api_config():
 
 # --- 程序启动时加载 API 和数据库配置 ---
 load_api_config()
+
+
+def initialize_llm():
+    """在应用启动时初始化全局LLM实例。"""
+    global llm, current_model, BASE_URL, apikey
+    if not all([current_model, BASE_URL, apikey]):
+        logging.error("LLM 配置不完整，无法初始化。")
+        return False
+    
+    logging.info(f"正在初始化 LLM 模型: {current_model}")
+    llm = ChatOpenAI(
+        model=current_model,
+        base_url=BASE_URL,
+        api_key=apikey,
+        temperature=0,
+        streaming=False,
+    )
+    logging.info("LLM 实例初始化成功。")
+    return True
 
 
 def get_db_connection():
@@ -537,6 +563,65 @@ def new_chat():
         logging.error(f"为用户 {username} 创建新会话时数据库出错: {e}")
         return jsonify({'success': False, 'error': '创建新会话失败'}), 500
 
+# 初始化rag链
+def initialize_rag_system():
+    """在应用启动时加载向量数据库并构建RAG链。"""
+    global rag_chain, llm
+    logging.info("正在初始化 RAG 知识库系统...")
+    try:
+        # --- 路径定义 ---
+        knowledge_base_dir = os.path.join(BASE_DIR, "knowledge_base")
+        model_path = os.path.join(knowledge_base_dir, "models", "bge-small-zh-v1.5")
+        persist_directory = os.path.join(knowledge_base_dir, "db")
+
+        if not os.path.exists(persist_directory):
+            error_msg = f"知识库持久化目录不存在: {persist_directory}。请先运行 'python knowledge_base/build_knowledge.py' 来构建知识库。"
+            logging.error(error_msg)
+            raise FileNotFoundError(error_msg)
+
+        # --- 初始化组件 ---
+        logging.info("正在加载 RAG 的 Embedding 模型...")
+        model_kwargs = {'device': 'cpu'}
+        encode_kwargs = {'normalize_embeddings': True}
+        embedding_function = HuggingFaceEmbeddings(
+            model_name=model_path,
+            model_kwargs=model_kwargs,
+            encode_kwargs=encode_kwargs
+        )
+
+        logging.info("正在加载向量数据库...")
+        db = Chroma(
+            persist_directory=persist_directory,
+            embedding_function=embedding_function
+        )
+        retriever = db.as_retriever(search_kwargs={"k": 3})
+
+        # --- 构建RAG链 ---
+        template = (
+            "请只根据以下提供的上下文信息来回答问题。\n"
+            "如果根据上下文信息无法回答问题，请直接说\"根据提供的知识库，我无法回答该问题\"，不要自行编造答案。\n\n"
+            "上下文:\n{context}\n\n"
+            "问题:\n{question}"
+        )
+        prompt = ChatPromptTemplate.from_template(template)
+
+        # RAG链将问题传递给检索器获取上下文，然后与问题一起传递给提示模板，再由LLM处理，最后输出字符串
+        rag_chain = (
+            {"context": retriever, "question": RunnablePassthrough()}
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+        logging.info("RAG 知识库系统初始化成功。")
+        return True
+
+    except Exception as e:
+        logging.error(f"初始化 RAG 系统时发生严重错误: {e}", exc_info=True)
+        rag_chain = None
+        return False
+
+
+
 # --- 新增：LangChain Agent 的 MCP 工具封装 ---
 # 这里是对mcp格式的langchain翻译，翻译成一个类
 
@@ -603,6 +688,41 @@ class McpTool(BaseTool):
         
         return function_response_text
 
+class KnowledgeBaseToolInput(BaseModel):
+    """知识库查询工具的输入模型。"""
+    # Field(description=...) 的作用是给这个字段附加一个描述。
+    query: str = Field(description="需要从知识库中查询的具体问题或关键词。")
+
+class KnowledgeBaseTool(BaseTool):
+    """
+    一个用于查询本地知识库以获取因果推断相关知识的工具。
+    """
+    name: str = "knowledge_base_query"
+    description: str = (
+        "用于回答关于因果推断、统计学和机器学习的通用知识性问题。"
+        "当你需要查找一个概念的定义、解释一个术语或获取背景知识时，必须使用此工具。"
+        "例如，当分析结果中出现 '混杂变量' 时，你可以用它来查询 '混杂变量是什么'。"
+    )
+    args_schema: Type[BaseModel] = KnowledgeBaseToolInput
+
+    def _run(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError("KnowledgeBaseTool 不支持同步执行。")
+
+    async def _arun(self, query: str) -> Any:
+        """通过 RAG 链异步执行知识库查询。"""
+        global rag_chain
+        if not rag_chain:
+            return "知识库系统当前不可用。"
+            
+        logging.info(f"知识库工具正在查询: '{query}'")
+        try:
+            response = await rag_chain.ainvoke(query)
+            logging.debug(f"知识库工具返回了原始数据 (前200字符): {response[:200]}...")
+            return response
+        except Exception as e:
+            logging.error(f"知识库查询时发生错误: {e}", exc_info=True)
+            return f"查询知识库时出错: {e}"
+
 
 
 # --- 核心修改：重构 ai_call 函数以使用 LangChain Agent ---
@@ -613,9 +733,15 @@ async def ai_call(text, user_id, username, session_id):
     """
     history_messages_raw = get_chat_history(session_id, user_id, limit=20)
     
-    # 检查MCP会话是否在启动时成功建立，如果失败则回退到普通聊天模式
+    # 检查MCP会话和rag是否在启动时成功建立，如果失败则回退到普通聊天模式
     if not mcp_session or not mcp_tools:
-        logging.error("ai_call: MCP会话或工具不可用。将作为普通聊天继续，不使用工具。")
+        logging.warning("ai_call: MCP会话或工具不可用。")
+    if not rag_chain:
+        logging.warning("ai_call: RAG知识库系统不可用。")
+
+    # 如果两者都不可用，则回退到普通聊天模式
+    if (not mcp_session or not mcp_tools) and not rag_chain:
+        logging.error("MCP和RAG均不可用。将作为普通聊天继续。")
         client = OpenAI(base_url=BASE_URL, api_key=apikey)
         messages = [{"role": "system", "content": "你是一个有用的工程师助手，请根据上下文进行回复。"}]
         messages.extend(history_messages_raw)
@@ -624,41 +750,43 @@ async def ai_call(text, user_id, username, session_id):
         response = client.chat.completions.create(model=current_model, messages=messages)
         return {"type": "text", "summary": response.choices[0].message.content}
 
-    # 1. 初始化 LangChain 的 LLM 封装
+    # 1. 初始化 LangChain 的 LLM 封装 (已移动到全局)
+    global llm
 
-    # ----------------------------------------------------------------
-    llm = ChatOpenAI(
-        model=current_model,
-        base_url=BASE_URL,
-        api_key=apikey,
-        temperature=0,
-        streaming=False,
-    )
-
-    # 2. 从 mcp_tools 动态创建 LangChain 工具列表
-    # 必须是定义为langchain的工具列表
+    # 2. 动态创建 LangChain 工具列表
     langchain_tools: List[BaseTool] = []
-    for tool_def in mcp_tools:
-        func_info = tool_def["function"]
-        # 为动态创建的 Pydantic 模型生成一个唯一的类名
-        model_name = f"{func_info['name'].replace('_', ' ').title().replace(' ', '')}Input"
-        args_schema = create_pydantic(func_info["parameters"], model_name)
-        
-        langchain_tool = McpTool(
-            name=func_info["name"],
-            description=func_info["description"],
-            args_schema=args_schema,
-            session=mcp_session,
-            username=username
-        )
-        langchain_tools.append(langchain_tool)
+    
+    # 2a. 添加 MCP 工具
+    if mcp_session and mcp_tools:
+        for tool_def in mcp_tools:
+            func_info = tool_def["function"]
+            model_name = f"{func_info['name'].replace('_', ' ').title().replace(' ', '')}Input"
+            args_schema = create_pydantic(func_info["parameters"], model_name)
+            
+            langchain_tool = McpTool(
+                name=func_info["name"],
+                description=func_info["description"],
+                args_schema=args_schema,
+                session=mcp_session,
+                username=username
+            )
+            langchain_tools.append(langchain_tool)
+    
+    # 2b. 添加知识库工具
+    if rag_chain:
+        knowledge_tool = KnowledgeBaseTool()
+        langchain_tools.append(knowledge_tool)
 
-    # 3. 创建 Agent 的提示模板
-    # 这个模板指导 Agent 如何行动，并定义了输入变量
+    # 3. 创建 Agent 的提示模板 (使用新的、更强大的指令)
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "你是一个有用的工程师助手，可以使用工具来获取额外信息。"
-                   "你的主要任务是分析工具返回的JSON数据，并以详细的自然语言（根据用户给你的语言风格）向用户总结关键发现。"
-                   "现在有一下几个要求：1.不要在你的回答中逐字重复整个JSON数据。请根据上下文进行回复。2. 请使用Markdown格式（例如，使用项目符号、加粗、表格等）来组织你的回答 3. 回答需要依照因果推断相关的知识和术语进行回答"),
+        ("system", """你是一位专业的因果分析专家。你的任务是为用户提供不仅准确，而且易于理解详细严谨的分析报告。请严格遵循以下工作流程：
+
+1.  **分析与识别**: 首先，仔细理解用户的请求。如果请求是进行数据分析，请使用 `perform_causal_analysis` 工具来获取核心的量化结果和因果图结构。
+
+2.  **反思与增强**: 在获得分析工具返回的 JSON 结果后，仔细检查其中的关键因果术语（例如 "混杂变量", "对撞因子", "中介效应", "后门路径" 等）。然后，你必须使用 `knowledge_base_query` 工具，对这些识别出的关键术语进行查询，以获取它们的权威定义和解释。如果用户只是进行知识性提问，也请使用 `knowledge_base_query` 工具。
+
+3.  **综合报告**: 最后，将第一步的量化分析结果（如果有）和第二步的理论知识解释有机地结合起来，生成一份全面、详尽的最终报告。报告中必须包含数据分析的结论，并辅以从知识库中获得的背景知识来解释这些结论为何是可靠的。请使用 Markdown 格式化你的报告，使其清晰易读。
+"""),
         MessagesPlaceholder(variable_name="chat_history"),
         ("user", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"), # Agent 内部工作空间
@@ -703,29 +831,30 @@ async def ai_call(text, user_id, username, session_id):
     final_output_summary = agent_response.get("output", "抱歉，我在处理时遇到了问题。")
     
     # 为了保持与前端的兼容性，我们需要检查是否是因果图的响应
-    # 这需要从 Agent 的中间步骤中获取原始的工具输出
+    # 我们会遍历所有的中间步骤，查找任何成功的 'perform_causal_analysis' 工具调用
     intermediate_steps = agent_response.get("intermediate_steps", [])
-    if intermediate_steps:
-        # 获取最后一个工具调用的动作和观察结果
-        last_action, last_observation = intermediate_steps[-1]
-        last_tool_name = last_action.tool
+    
+    # 从后往前遍历中间步骤，以获取最近一次的因果分析结果
+    for step in reversed(intermediate_steps):
+        action, observation = step
         
-        # 如果最后一个工具是因果分析，我们特殊处理它
-        if last_tool_name == 'perform_causal_analysis':
+        if action.tool == 'perform_causal_analysis':
             try:
-                # last_observation 是从 McpTool 返回的原始 JSON 字符串
-                analysis_data = json.loads(last_observation)
+                # observation 是从 McpTool 返回的原始 JSON 字符串
+                analysis_data = json.loads(observation)
                 if analysis_data.get("success"):
-                    logging.info("因果分析工具成功执行，返回结构化数据和 Agent 的总结。")
+                    logging.info("在中间步骤中找到并处理了 'perform_causal_analysis' 的成功调用。")
                     # 返回与旧版 `ai_call` 兼容的结构
                     return {
                         "type": "causal_graph",
                         "summary": final_output_summary,  # 这是 Agent 生成的最终总结
                         "data": analysis_data.get("data") # 这是工具返回的原始绘图数据
                     }
-            except json.JSONDecodeError:
-                logging.error("无法解析来自因果分析工具的JSON响应。将返回纯文本总结。")
+            except (json.JSONDecodeError, TypeError):
+                logging.error(f"无法解析来自因果分析工具的JSON响应: {observation}。将继续查找或返回纯文本。")
+            # 如果解析失败或 "success" 不为 true，循环会继续，查找更早的调用
 
+    # 如果循环结束都没有找到成功的因果分析调用，则执行默认行为
     # 对于普通聊天或其它工具的调用，直接返回 Agent 的总结
     logging.info("返回纯文本总结。")
     return {"type": "text", "summary": final_output_summary}
@@ -1230,7 +1359,18 @@ if __name__ == '__main__':
     # 注册应用退出时的清理函数
     atexit.register(shutdown_mcp_connection)
 
-    # --- 启动后台事件循环并等待 MCP 就绪 ---
+    # --- 全新启动流程 ---
+    # 1. 初始化 LLM
+    if not initialize_llm():
+        logging.critical("LLM 初始化失败，应用无法启动。")
+        sys.exit(1)
+
+    # 2. 初始化 RAG 系统
+    if not initialize_rag_system():
+        # RAG 不是致命错误，允许在没有知识库的情况下继续运行
+        logging.warning("RAG 系统初始化失败。应用将以无知识库模式运行。")
+    
+    # 3. 启动后台事件循环并等待 MCP 就绪
     mcp_ready_event = threading.Event()
     
     ## 后台线程
