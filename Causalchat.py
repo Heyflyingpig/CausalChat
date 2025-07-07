@@ -559,24 +559,11 @@ def new_chat():
     user_id = session['user_id']
     username = session.get('username', '未知用户')
     new_session_id = str(uuid.uuid4())
-    # 为新会话创建一个默认标题
-    title = f"新对话 - {datetime.now().strftime('%m-%d %H:%M')}"
 
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            # 在 sessions 表中创建一条新记录
-            cursor.execute(
-                "INSERT INTO sessions (id, user_id, title) VALUES (%s, %s, %s)",
-                (new_session_id, user_id, title)
-            )
-            conn.commit()
-        
-        logging.info(f"用户 {username} (ID: {user_id}) 创建新会话: {new_session_id}")
-        return jsonify({'success': True, 'new_session_id': new_session_id})
-    except mysql.connector.Error as e:
-        logging.error(f"为用户 {username} 创建新会话时数据库出错: {e}")
-        return jsonify({'success': False, 'error': '创建新会话失败'}), 500
+    # --- 核心修改：不再立即创建数据库记录，只生成session_id ---
+    # 会话记录将在用户发送第一条消息时通过 save_chat() 函数创建
+    logging.info(f"用户 {username} (ID: {user_id}) 生成新会话ID: {new_session_id} (延迟创建)")
+    return jsonify({'success': True, 'new_session_id': new_session_id})
 
 # 初始化rag链
 def initialize_rag_system():
@@ -879,6 +866,7 @@ async def ai_call(text, user_id, username, session_id):
 def save_chat(user_id, session_id, user_msg, ai_response):
     """
     将用户和AI的交互保存到新的优化数据库结构中。
+    - 采用延迟创建策略：如果session不存在，则在第一条消息时创建
     - 在 chat_messages 中为用户和AI分别创建记录。
     - 如果AI响应包含附件，则在 chat_attachments 中创建记录。
     - 更新 sessions 表的元数据。
@@ -887,13 +875,26 @@ def save_chat(user_id, session_id, user_msg, ai_response):
 
     try:
         with get_db_connection() as conn:
-            # --- 修改：使用字典游标并预先获取会话信息 ---
             cursor = conn.cursor(dictionary=True)
 
-            # 0. 检查这是否是第一次保存消息，以决定是否更新标题
-            cursor.execute("SELECT message_count FROM sessions WHERE id = %s", (session_id,))
+            # --- 核心修改：实现延迟session创建逻辑 ---
+            # 0. 检查session是否存在，如果不存在则创建
+            cursor.execute("SELECT message_count, title FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
             session_data = cursor.fetchone()
-            is_first_message = session_data and session_data['message_count'] == 0
+            
+            if not session_data:
+                # Session不存在，创建新的session记录（延迟创建）
+                new_title = user_msg[:8] + ("..." if len(user_msg) > 8 else "")
+                cursor.execute("""
+                    INSERT INTO sessions (id, user_id, title, created_at, last_activity_at, message_count)
+                    VALUES (%s, %s, %s, %s, %s, 0)
+                """, (session_id, user_id, new_title, timestamp_dt, timestamp_dt))
+                is_first_message = True
+                logging.info(f"延迟创建session记录: {session_id} (用户: {user_id}, 标题: '{new_title}')")
+            else:
+                # Session已存在，判断是否为第一条消息
+                is_first_message = session_data['message_count'] == 0
+            # ------------------------------------------
             
             # 1. 保存用户消息
             sql_user = """
@@ -938,8 +939,8 @@ def save_chat(user_id, session_id, user_msg, ai_response):
 
             # --- 修改：根据是否为第一条消息，决定是否更新标题 ---
             if is_first_message:
-                # 4a. 更新会话，包括新标题
-                new_title = user_msg[:8] # 截取前20个字符作为标题
+                # 4a. 更新会话，包括新标题（或确认创建时的标题）
+                new_title = user_msg[:8] # 截取前8个字符作为标题
                 new_title = new_title + "..." if len(user_msg) > 8 else new_title
                 sql_update_session = """
                     UPDATE sessions 
@@ -1060,17 +1061,23 @@ def load_session_content():
     if not session_id:
         return jsonify({"success": False, "error": "缺少 session ID"}), 400
 
-    logging.info(f"用户 {username} (ID: {user_id}) 请求加载会话: {session_id} (新版逻辑)")
+    logging.info(f"用户 {username} (ID: {user_id}) 请求加载会话: {session_id} (延迟创建模式)")
 
     messages = []
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor(dictionary=True)
-            # 首先验证用户是否有权访问此会话
+            
+            # --- 核心修改：处理延迟创建的session ---
+            # 首先检查session是否存在
             cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
-            if not cursor.fetchone():
-                logging.warning(f"用户 {username} 尝试访问无权或不存在的会话 {session_id}")
-                return jsonify({"success": False, "error": "无法加载该会话或会话不存在"}), 404
+            session_exists = cursor.fetchone()
+            
+            if not session_exists:
+                # Session还不存在（用户还没发送第一条消息），返回空消息列表
+                logging.info(f"会话 {session_id} 尚未创建（延迟创建模式），返回空消息列表")
+                return jsonify({"success": True, "messages": []})
+            # --------------------------------------------
 
             # 获取所有消息，并左连接附件表
             # 这里的 cm 是 chat_messages 表的别名,ca 是 chat_attachments 表的别名
@@ -1101,7 +1108,7 @@ def load_session_content():
                 # 对于用户消息或没有附件的AI消息，直接使用content
                 messages.append({"sender": sender, "text": row["content"]})
         
-        logging.info(f"用户 {username} 成功加载会话 {session_id}")
+        logging.info(f"用户 {username} 成功加载会话 {session_id} ({len(messages)} 条消息)")
         return jsonify({"success": True, "messages": messages})
 
     except mysql.connector.Error as e:
@@ -1130,7 +1137,7 @@ def change_session():
 
     try:
         with get_db_connection() as conn:
-            # --- 修改：增加 user_id 条件以确保安全 ---
+            # --- 修改：增加 user_id 条件以确保安全，并处理延迟创建的session ---
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE sessions SET title = %s WHERE id = %s AND user_id = %s",
@@ -1138,10 +1145,20 @@ def change_session():
             )
             conn.commit()
             
-            # --- 新增：检查是否有行被更新，处理权限不足或会话不存在的情况 ---
+            # --- 修改：更详细的错误处理，区分延迟创建的session ---
             if cursor.rowcount == 0:
-                logging.warning(f"用户 {user_id} 尝试更新不属于自己的会话 {session_id} 或会话不存在。")
-                return jsonify({"success": False, "error": "无法更新会话，权限不足或会话不存在"}), 404
+                # 检查session是否因为延迟创建而不存在
+                cursor.execute("SELECT 1 FROM chat_messages WHERE session_id = %s AND user_id = %s LIMIT 1", (session_id, user_id))
+                has_messages = cursor.fetchone()
+                
+                if not has_messages:
+                    # session确实不存在且没有消息，可能是延迟创建的session
+                    logging.info(f"用户 {user_id} 尝试修改尚未创建的会话标题 {session_id}（延迟创建模式）")
+                    return jsonify({"success": False, "error": "无法修改标题，请先发送一条消息来创建会话"}), 400
+                else:
+                    # 有消息但session记录不存在，这是一个数据不一致的问题
+                    logging.warning(f"用户 {user_id} 的会话 {session_id} 存在消息但session记录缺失")
+                    return jsonify({"success": False, "error": "会话数据异常，请联系管理员"}), 500
             
         logging.info(f"用户 {user_id} 成功将会话 {session_id} 的标题更新为 '{title}'")
         return jsonify({"success": True, "message": "会话标题已更新"})
@@ -1151,7 +1168,7 @@ def change_session():
 
 @app.route('/api/delete_session', methods=['POST'])
 def delete_session():
-    # --- 核心修改：安全和完整的删除逻辑 ---
+    # --- 核心修改：安全和完整的删除逻辑，支持延迟创建 ---
     from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
@@ -1170,29 +1187,46 @@ def delete_session():
             # 开启事务
             conn.start_transaction()
             
-            # 0. 验证用户是否有权限删除此会话
+            # --- 修改：处理延迟创建的session ---
+            # 0. 检查session是否存在
             cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
-            if not cursor.fetchone():
-                conn.rollback() # 回滚事务
-                logging.warning(f"用户 {user_id} 尝试删除无权或不存在的会话 {session_id}")
-                return jsonify({"success": False, "error": "无法删除该会话，权限不足或会话不存在"}), 404
+            session_exists = cursor.fetchone()
+            
+            if not session_exists:
+                # 检查是否有相关的消息（可能是数据不一致的情况）
+                cursor.execute("SELECT 1 FROM chat_messages WHERE session_id = %s AND user_id = %s LIMIT 1", (session_id, user_id))
+                has_messages = cursor.fetchone()
+                
+                if not has_messages:
+                    # session不存在且没有消息，这是正常的延迟创建情况
+                    conn.rollback()
+                    logging.info(f"用户 {user_id} 尝试删除尚未创建的会话 {session_id}（延迟创建模式），视为成功")
+                    return jsonify({"success": True, "message": "会话删除成功（会话尚未创建）"})
+                else:
+                    # 有消息但session记录不存在，清理孤立的消息
+                    logging.warning(f"发现用户 {user_id} 的会话 {session_id} 有孤立消息，正在清理")
+            # ------------------------------------------
 
             # 1. 删除与该会话相关的附件 (通过连接 chat_messages)
             # 这是为了处理 chat_attachments 和 chat_messages 之间没有直接外键的情况
             sql_delete_attachments = """
                 DELETE ca FROM chat_attachments ca
                 JOIN chat_messages cm ON ca.message_id = cm.id
-                WHERE cm.session_id = %s
+                WHERE cm.session_id = %s AND cm.user_id = %s
             """
-            cursor.execute(sql_delete_attachments, (session_id,))
-            logging.info(f"为会话 {session_id} 删除了 {cursor.rowcount} 个附件")
+            cursor.execute(sql_delete_attachments, (session_id, user_id))
+            deleted_attachments = cursor.rowcount
+            logging.info(f"为会话 {session_id} 删除了 {deleted_attachments} 个附件")
 
             # 2. 删除该会话的所有聊天记录
-            cursor.execute("DELETE FROM chat_messages WHERE session_id = %s", (session_id,))
-            logging.info(f"为会话 {session_id} 删除了 {cursor.rowcount} 条聊天记录")
+            cursor.execute("DELETE FROM chat_messages WHERE session_id = %s AND user_id = %s", (session_id, user_id))
+            deleted_messages = cursor.rowcount
+            logging.info(f"为会话 {session_id} 删除了 {deleted_messages} 条聊天记录")
 
-            # 3. 删除会话本身
-            cursor.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
+            # 3. 删除会话本身（如果存在）
+            if session_exists:
+                cursor.execute("DELETE FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
+                logging.info(f"删除了会话记录 {session_id}")
             
             # 提交事务
             conn.commit()
