@@ -108,6 +108,21 @@ def load_api_config():
                     app.secret_key = secrets_data["SECRET_KEY"]
                     # ----------------------------------
 
+                    # --- 新增：加载并设置 LangSmith 环境变量 ---
+                    # 检查 LangSmith API Key 是否存在，如果存在则启用追踪
+                    if "LANGCHAIN_API_KEY" in secrets_data:
+                        os.environ["LANGCHAIN_TRACING"] = "true"
+                        os.environ["LANGCHAIN_API_KEY"] = secrets_data["LANGCHAIN_API_KEY"]
+                        
+                        # 设置项目名，如果不存在则使用默认值
+                        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
+                        project_name = secrets_data.get("LANGCHAIN_PROJECT", "")
+                        os.environ["LANGCHAIN_PROJECT"] = project_name
+                        
+                        logging.info(f"LangSmith 追踪已启用，项目名: '{project_name}'")
+                    else:
+                        logging.warning(f"未在 {SECRETS_PATH} 中找到 'LANGCHAIN_API_KEY'。LangSmith 追踪将不会启用。")
+                    # ------------------------------------------
 
                     # 检查并加载AI配置
                     for key in required_keys:
