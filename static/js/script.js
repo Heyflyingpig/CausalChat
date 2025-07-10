@@ -19,6 +19,7 @@ const chatArea = document.getElementById('chatArea');
 // --- 新增：全局变量存储当前会话的用户名 ---
 let currentUsername = null;
 let currentSessionId = null; // <--- 新增：全局变量跟踪当前会话ID
+let isNewSessionPendingDisplay = false; // --- 新增：用于跟踪新会话是否已在UI中临时显示
 let chatEventListenersAttached = false; // 新增：跟踪事件监听器是否已附加
 
 // 切换登录和注册表单
@@ -400,7 +401,6 @@ async function sendMessage() {
     const userInput = document.getElementById('userInput');
     const sendButton = document.getElementById('sendButton'); // 新增：获取发送按钮
     const message = userInput.value.trim();
-    const isNewSession = !currentSessionId; // --- 新增：在开始时检查这是否是一个新会话 ---
 
     if (!message) {
         return;
@@ -411,20 +411,16 @@ async function sendMessage() {
         return;
     }
 
-    // 如果是新对话，先在后端创建会话
-    if (isNewSession) {
-        console.log("检测到新对话，正在后端创建会话...");
+    // --- 核心修改：如果会话ID不存在，则先在后端获取一个 ---
+    if (!currentSessionId) {
+        console.log("检测到新对话（无会话ID），正在后端获取ID...");
         try {
-            const response = await fetch('/api/new_chat', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ username: currentUsername })
-            });
+            const response = await fetch('/api/new_chat', { method: 'POST' });
             const data = await response.json();
             if (data.success) {
                 currentSessionId = data.new_session_id; // 更新全局ID
-                console.log(`新会话已创建: ${currentSessionId}`);
-                // --- 移除：不在这里加载历史，因为标题还没更新 ---
+                isNewSessionPendingDisplay = true; // 标记为待显示
+                console.log(`新会话ID已获取: ${currentSessionId}`);
             } else {
                 showError(data.error || "创建新对话失败。");
                 return; // 创建失败则中止发送
@@ -434,6 +430,12 @@ async function sendMessage() {
             console.error("创建新对话错误:", error);
             return; // 创建失败则中止发送
         }
+    }
+
+    // --- 核心修改：如果是一个待显示的新会话，立即在UI上创建临时条目 ---
+    if (isNewSessionPendingDisplay) {
+        addTemporarySessionToUI(currentSessionId, message);
+        isNewSessionPendingDisplay = false; // 重置标志，防止重复创建
     }
 
     addMessage('user', message);
@@ -506,7 +508,7 @@ function newChat() {
 
     console.log("正在准备新聊天界面...");
 
-    // 注意：后端会话将在用户发送第一条消息时创建。
+
     // --- 修复：立即在后端创建新会话 ---
     handleNewChatRequest();
 }
@@ -532,11 +534,13 @@ async function handleNewChatRequest() {
         if (data.success) {
             currentSessionId = data.new_session_id;
             console.log(`新会话已创建: ${currentSessionId}`);
+            isNewSessionPendingDisplay = true; // --- 新增：标记这个新会话等待用户输入后在UI显示
             
             addMessage('ai', '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析');
             document.getElementById('userInput').focus();
 
-            await loadHistory(); // 重新加载历史列表以显示新会话
+            // 注意：此时不调用loadHistory，因为新会话还不在数据库里
+            // await loadHistory(); // 重新加载历史列表以显示新会话
         } else {
             showError(data.error || "创建新对话失败。");
         }
@@ -666,6 +670,46 @@ function makeTitleEditable(previewDiv, sessionId, oldTitle) {
     });
 }
 
+// --- 新增：在前端临时添加一个会话条目，以实现即时反馈 ---
+function addTemporarySessionToUI(sessionId, title) {
+    console.log("正在前端临时添加新会话条目以提高UI响应性...");
+
+    // 移除"无记录"的提示消息
+    const emptyMessage = historyList.querySelector('.history-empty-message');
+    if (emptyMessage) {
+        emptyMessage.remove();
+    }
+
+    // 创建一个新的、简化的会话条目DOM元素
+    const historyItem = document.createElement('div');
+    historyItem.className = 'history-item';
+    historyItem.setAttribute('data-session-id', sessionId);
+    historyItem.style.opacity = '0.7'; // 让临时条目半透明以作区分
+
+    const itemContent = document.createElement('div');
+    itemContent.className = 'history-item-content';
+
+    const sessionInfo = document.createElement('div');
+    sessionInfo.className = 'session-info';
+
+    const timeDiv = document.createElement('div');
+    timeDiv.className = 'session-time';
+    timeDiv.textContent = '刚刚';
+
+    const previewDiv = document.createElement('div');
+    previewDiv.className = 'preview-text';
+    const previewText = title.length > 25 ? title.substring(0, 25) + '...' : title;
+    previewDiv.textContent = previewText;
+
+    sessionInfo.appendChild(timeDiv);
+    itemContent.appendChild(sessionInfo);
+    itemContent.appendChild(previewDiv);
+    historyItem.appendChild(itemContent);
+
+    // 将新条目添加到历史记录列表的顶部
+    historyList.prepend(historyItem);
+}
+
 // 加载历史记录
 async function loadHistory() {
     if (!currentUsername) {
@@ -695,6 +739,7 @@ async function loadHistory() {
             // --- 新增：用于跟踪当前打开的滑动项 ---
             let currentlyOpenItem = null;
 
+            // 重建历史记录部分
             sessions.forEach(session => {
                 const session_id = session[0];
                 const info = session[1];
