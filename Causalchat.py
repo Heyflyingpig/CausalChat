@@ -19,6 +19,15 @@ import threading
 import hashlib
 
 
+# --- 新增：从新的配置模块导入设置 ---
+try:
+    from config.settings import settings
+except (ValueError, FileNotFoundError) as e:
+    logging.critical(f"无法加载应用配置，程序终止。错误: {e}")
+    sys.exit(1)
+# ------------------------------------
+
+
 # --- 新增：LangChain Agent 相关导入 ---
 from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_openai_tools_agent
@@ -49,8 +58,8 @@ app = Flask(__name__, static_folder='static')
 # --- 新增：为 Flask Sessions 设置密钥 ---
 # 会话管理（例如登录状态）需要一个密钥来对 cookie 进行加密签名。
 # 这是支持多用户并发会话的基础。
-# 我们将从 secrets.json 文件中加载它。
-app.secret_key = None 
+# 我们将从新的配置模块中加载它。
+app.secret_key = settings.SECRET_KEY
 # ------------------------------------
 
 BASE_DIR = os.path.dirname(__file__)
@@ -58,10 +67,10 @@ BASE_DIR = os.path.dirname(__file__)
 os.makedirs(os.path.join(BASE_DIR, 'static', 'generated_graphs'), exist_ok=True)
 # -----------------------------
 SETTING_DIR = os.path.join(BASE_DIR, "setting")
-SECRETS_PATH = os.path.join(BASE_DIR, "secrets.json")
 
 # --- 修改：全局状态管理 ---
 # 将 MCP 和事件循环,llm和rag链的相关的状态集中管理
+
 mcp_session: ClientSession | None = None
 mcp_tools: list = []
 mcp_process_stack = AsyncExitStack()
@@ -71,113 +80,19 @@ llm = None
 # -------------------------
 
 
-# --- 修改：从 secrets.json 加载 API 配置 ---
-
-current_model = None
-BASE_URL = None
-apikey = None
-
-MYSQL_HOST = None
-MYSQL_USER = None
-MYSQL_PASSWORD = None
-MYSQL_DATABASE = None
-
-
-def load_api_config():
-        """从 secrets.json 加载 API 和数据库配置。如果缺少关键配置则会失败。"""
-        ## 这里的raise是用来手动抛出错误，将捕获的错误传递和返回给调用者
-        global current_api, current_model, BASE_URL, apikey
-        global MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-
-        # --- 新增：添加 SECRET_KEY 到必需列表 ---
-        required_keys_app = ["SECRET_KEY"]
-        # ------------------------------------
-        required_keys = ["API_KEY", "BASE_URL", "MODEL"] # 假设你的 secrets.json 用的是这些键
-        required_keys_db = ["MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"]
-
-        try:
-            if os.path.exists(SECRETS_PATH):
-                with open(SECRETS_PATH, "r", encoding="utf-8") as f:
-                    secrets_data = json.load(f)
-
-                    # --- 新增：检查并加载应用密钥 ---
-                    for key in required_keys_app:
-                        if key not in secrets_data:
-                            logging.error(f"关键应用配置 '{key}' 未在 {SECRETS_PATH} 中找到。")
-                            raise ValueError(f"配置错误: {SECRETS_PATH} 中缺少 '{key}'")
-                    app.secret_key = secrets_data["SECRET_KEY"]
-                    # ----------------------------------
-
-                    # --- 新增：加载并设置 LangSmith 环境变量 ---
-                    # 检查 LangSmith API Key 是否存在，如果存在则启用追踪
-                    if "LANGCHAIN_API_KEY" in secrets_data:
-                        os.environ["LANGCHAIN_TRACING"] = "true"
-                        os.environ["LANGCHAIN_API_KEY"] = secrets_data["LANGCHAIN_API_KEY"]
-                        
-                        # 设置项目名，如果不存在则使用默认值
-                        os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-                        project_name = secrets_data.get("LANGCHAIN_PROJECT", "")
-                        os.environ["LANGCHAIN_PROJECT"] = project_name
-                        
-                        logging.info(f"LangSmith 追踪已启用，项目名: '{project_name}'")
-                    else:
-                        logging.warning(f"未在 {SECRETS_PATH} 中找到 'LANGCHAIN_API_KEY'。LangSmith 追踪将不会启用。")
-                    # ------------------------------------------
-
-                    # 检查并加载AI配置
-                    for key in required_keys:
-                        if key not in secrets_data:
-                            logging.error(f"关键配置 '{key}' 未在 {SECRETS_PATH} 中找到。")
-                            raise ValueError(f"配置错误: {SECRETS_PATH} 中缺少 '{key}'")
-                    
-                    # 修正这里的键名以匹配你 secrets.json 中的实际键名
-                    apikey = secrets_data["API_KEY"] 
-                    BASE_URL = secrets_data["BASE_URL"]
-                    current_model = secrets_data["MODEL"]
-                   
-
-                    # 检查并加载 MySQL 配置
-                    for key in required_keys_db:
-                        if key not in secrets_data:
-                            logging.error(f"关键数据库配置 '{key}' 未在 {SECRETS_PATH} 中找到。")
-                            raise ValueError(f"配置错误: {SECRETS_PATH} 中缺少 '{key}'")
-                    
-                    MYSQL_HOST = secrets_data["MYSQL_HOST"]
-                    MYSQL_USER = secrets_data["MYSQL_USER"]
-                    MYSQL_PASSWORD = secrets_data["MYSQL_PASSWORD"]
-                    MYSQL_DATABASE = secrets_data["MYSQL_DATABASE"]
-                    
-                    logging.info(f"API 和数据库配置已从 {SECRETS_PATH} 成功加载。")
-            else:
-                logging.error(f"敏感信息配置文件 {SECRETS_PATH} 不存在。程序无法继续。")
-                raise FileNotFoundError(f"必需的配置文件 {SECRETS_PATH} 未找到。")
-        
-        except json.JSONDecodeError:
-            logging.error(f"解析敏感信息配置文件 {SECRETS_PATH} 失败。请检查文件格式。")
-            raise
-        except ValueError as ve: # 捕获我们自己抛出的 ValueError
-            logging.error(str(ve))
-            raise
-        except Exception as e:
-            logging.error(f"加载 API 或数据库配置时发生未知错误: {e}")
-            raise
-
-# --- 程序启动时加载 API 和数据库配置 ---
-load_api_config()
-
-
 def initialize_llm():
     """在应用启动时初始化全局LLM实例。"""
-    global llm, current_model, BASE_URL, apikey
-    if not all([current_model, BASE_URL, apikey]):
+    global llm
+    # 使用新的配置对象
+    if not all([settings.MODEL, settings.BASE_URL, settings.API_KEY]):
         logging.error("LLM 配置不完整，无法初始化。")
         return False
     
-    logging.info(f"正在初始化 LLM 模型: {current_model}")
+    logging.info(f"正在初始化 LLM 模型: {settings.MODEL}")
     llm = ChatOpenAI(
-        model=current_model,
-        base_url=BASE_URL,
-        api_key=apikey,
+        model=settings.MODEL,
+        base_url=settings.BASE_URL,
+        api_key=settings.API_KEY,
         temperature=0,
         streaming=False,
     )
@@ -188,19 +103,20 @@ def initialize_llm():
 def get_db_connection():
     """创建并返回一个 MySQL 数据库连接。"""
     try:
+        # 使用新的配置对象
         conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD,
-            database=MYSQL_DATABASE # 连接到指定的数据库
+            host=settings.MYSQL_HOST,
+            user=settings.MYSQL_USER,
+            password=settings.MYSQL_PASSWORD,
+            database=settings.MYSQL_DATABASE # 连接到指定的数据库
         )
-        # logging.debug(f"成功连接到 MySQL 数据库 '{MYSQL_DATABASE}'。")
+        # logging.debug(f"成功连接到 MySQL 数据库 '{settings.MYSQL_DATABASE}'。")
         return conn
     except mysql.connector.Error as err:
         if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            logging.error(f"MySQL 连接错误: 用户 '{MYSQL_USER}' 或密码错误。")
+            logging.error(f"MySQL 连接错误: 用户 '{settings.MYSQL_USER}' 或密码错误。")
         elif err.errno == errorcode.ER_BAD_DB_ERROR:
-            logging.error(f"MySQL 连接错误: 数据库 '{MYSQL_DATABASE}' 不存在。")
+            logging.error(f"MySQL 连接错误: 数据库 '{settings.MYSQL_DATABASE}' 不存在。")
         else:
             logging.error(f"MySQL 连接错误: {err}")
         raise # 重新抛出异常，让调用者知道连接失败
@@ -221,7 +137,7 @@ def check_database_readiness():
             cursor.execute(f"""
                 SELECT table_name 
                 FROM information_schema.tables 
-                WHERE table_schema = '{MYSQL_DATABASE}'
+                WHERE table_schema = '{settings.MYSQL_DATABASE}'
             """)
             existing_tables = [row[0] for row in cursor.fetchall()]
             
@@ -237,16 +153,16 @@ def check_database_readiness():
             if not test_result or test_result[0] != 1:
                 raise RuntimeError("数据库连接测试失败")
             
-            logging.info(f"优化后的数据库 '{MYSQL_DATABASE}' 就绪检查通过。所有必需表已存在。")
+            logging.info(f"优化后的数据库 '{settings.MYSQL_DATABASE}' 就绪检查通过。所有必需表已存在。")
             return True
             
     except mysql.connector.Error as e:
         if e.errno == errorcode.ER_BAD_DB_ERROR:
-            error_msg = f"数据库 '{MYSQL_DATABASE}' 不存在。请先运行 'python database_init.py' 创建和初始化数据库。"
+            error_msg = f"数据库 '{settings.MYSQL_DATABASE}' 不存在。请先运行 'python database_init.py' 创建和初始化数据库。"
             logging.error(error_msg)
             raise RuntimeError(error_msg)
         elif e.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            error_msg = f"无法访问数据库。请检查用户 '{MYSQL_USER}' 的权限配置。"
+            error_msg = f"无法访问数据库。请检查用户 '{settings.MYSQL_USER}' 的权限配置。"
             logging.error(error_msg)
             raise RuntimeError(error_msg)
         else:
@@ -727,138 +643,77 @@ class KnowledgeBaseTool(BaseTool):
 
 
 
-# --- 核心修改：重构 ai_call 函数以使用 LangChain Agent ---
+# --- 核心修改：用 LangGraph 替换 ai_call ---
+from causal_agent.graph import agent_graph
+from causal_agent.state import CausalChatState
+
 async def ai_call(text, user_id, username, session_id):
     """
-    使用 LangChain Agent 与 LLM 交互并调用工具。
-    Agent 会自动处理工具选择、执行和结果总结的循环。
+    使用我们模块化的 LangGraph agent 来处理用户请求。
     """
+    # 1. 获取历史消息
     history_messages_raw = get_chat_history(session_id, user_id, limit=20)
     
-    # 检查MCP会话和rag是否在启动时成功建立，如果失败则回退到普通聊天模式
-    if not mcp_session or not mcp_tools:
-        logging.warning("ai_call: MCP会话或工具不可用。")
-    if not rag_chain:
-        logging.warning("ai_call: RAG知识库系统不可用。")
-
-    # 如果两者都不可用，则回退到普通聊天模式
-    if (not mcp_session or not mcp_tools) and not rag_chain:
-        logging.error("MCP和RAG均不可用。将作为普通聊天继续。")
-        client = OpenAI(base_url=BASE_URL, api_key=apikey)
-        messages = [{"role": "system", "content": "你是一个有用的工程师助手，请根据上下文进行回复。"}]
-        messages.extend(history_messages_raw)
-        messages.append({"role": "user", "content": text})
-        
-        response = client.chat.completions.create(model=current_model, messages=messages)
-        return {"type": "text", "summary": response.choices[0].message.content}
-
-    # 1. 初始化 LangChain 的 LLM 封装 (已移动到全局)
-    global llm
-
-    # 2. 动态创建 LangChain 工具列表
-    langchain_tools: List[BaseTool] = []
-    
-    # 2a. 添加 MCP 工具
-    if mcp_session and mcp_tools:
-        for tool_def in mcp_tools:
-            func_info = tool_def["function"]
-            model_name = f"{func_info['name'].replace('_', ' ').title().replace(' ', '')}Input"
-            args_schema = create_pydantic(func_info["parameters"], model_name)
-            
-            langchain_tool = McpTool(
-                name=func_info["name"],
-                description=func_info["description"],
-                args_schema=args_schema,
-                session=mcp_session,
-                username=username
-            )
-            langchain_tools.append(langchain_tool)
-    
-    # 2b. 添加知识库工具
-    if rag_chain:
-        knowledge_tool = KnowledgeBaseTool()
-        langchain_tools.append(knowledge_tool)
-
-    # 3. 创建 Agent 的提示模板 (使用新的、更强大的指令)
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """你是一位专业的因果分析专家。你的任务是为用户提供不仅准确，而且易于理解详细严谨的分析报告。请严格遵循以下工作流程：
-
-1.  **分析与识别**: 首先，仔细理解用户的请求。如果请求是进行数据分析，请使用 `perform_causal_analysis` 工具来获取核心的量化结果和因果图结构。
-
-2.  **反思与增强**: 在获得分析工具返回的 JSON 结果后，仔细检查其中的关键因果术语（例如 "混杂变量", "对撞因子", "中介效应", "后门路径" 等）。然后，你必须使用 `knowledge_base_query` 工具，对这些识别出的关键术语进行查询，以获取它们的权威定义和解释。如果用户只是进行知识性提问，也请使用 `knowledge_base_query` 工具。
-
-3.  **综合报告**: 最后，将第一步的量化分析结果（如果有）和第二步的理论知识解释有机地结合起来，生成一份全面、详尽的最终报告。报告中必须包含数据分析的结论，并辅以从知识库中获得的背景知识来解释这些结论为何是可靠的。请使用 Markdown 格式化你的报告，使其清晰易读。
-"""),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"), # Agent 内部工作空间
-    ])
-
-    # 4. 创建 Agent
-    # 我们使用 create_openai_tools_agent，它专门用于能调用工具的 OpenAI 模型
-    agent = create_openai_tools_agent(llm, langchain_tools, prompt)
-
-    # 5. 创建 Agent 执行器
-    # AgentExecutor 负责运行 Agent 的整个思考-行动-观察的循环
-    # --- 最终修复：显式启用中间步骤的返回 ---
-    # 新版 LangChain 中，AgentExecutor 默认不返回 intermediate_steps。
-    # 我们必须将 return_intermediate_steps=True 设置为 True，
-    # 才能在响应中获取工具调用的详细过程，从而正确地提取因果图数据。
-    agent_executor = AgentExecutor(
-        agent=agent, 
-        tools=langchain_tools, 
-        verbose=True, # verbose=True 会在日志中打印 Agent 的思考过程
-        return_intermediate_steps=True # 打印中间的工具调用步骤
-    )
-
-    # 6. 转换历史消息格式并调用 Agent
-    # LangChain Agent 需要特定的消息格式 (HumanMessage, AIMessage)
+    # 2. 将历史消息转换为 LangChain 格式
     chat_history = [
         HumanMessage(content=msg["content"]) if msg["role"] == "user" 
         else AIMessage(content=msg["content"]) 
         for msg in history_messages_raw
     ]
+    # 添加当前用户输入
+    chat_history.append(HumanMessage(content=text))
 
-    logging.info(f"正在为用户 {username} 调用 LangChain Agent...")
-    agent_response = await agent_executor.ainvoke({
-        "input": text,
-        "chat_history": chat_history
-    })
+    # 3. 构建 LangGraph 的初始状态
+    initial_state = CausalChatState(
+        messages=chat_history,
+        user_id=user_id,
+        username=username,
+        session_id=session_id,
+        tool_call_request=None,
+        analysis_parameters=None,
+        causal_analysis_result=None,
+        knowledge_base_result=None,
+        final_report=None,
+        ask_human=None,
+    )
+
+    # 4. 异步调用我们编译好的 LangGraph agent
+    logging.info(f"正在为用户 {username} 调用 LangGraph Agent...")
+    # .astream() 会返回一个包含所有中间步骤状态的流
+    # 我们只需要最后一个最终状态
+    final_state = None
+    async for event in agent_graph.astream(initial_state):
+        final_state = event
+    
+    final_state_data = list(final_state.values())[0]
+
 
     # --- 新增：调试日志，打印完整的 Agent 响应结构 ---
-    logging.info(f"完整的 Agent 响应: {agent_response}")
+    logging.info(f"完整的 Graph 最终状态: {final_state_data}")
     # ------------------------------------------------
 
-    # 7. 处理和格式化最终响应
-    final_output_summary = agent_response.get("output", "抱歉，我在处理时遇到了问题。")
+    # 5. 根据最终状态格式化响应
+    # 检查图是否需要暂停以等待用户输入
+    if final_state_data.get("ask_human"):
+        logging.info("Graph 请求用户输入，流程暂停。")
+        return {"type": "text", "summary": final_state_data["ask_human"]}
     
-    # 为了保持与前端的兼容性，我们需要检查是否是因果图的响应
-    # 我们会遍历所有的中间步骤，查找任何成功的 'perform_causal_analysis' 工具调用
-    intermediate_steps = agent_response.get("intermediate_steps", [])
-    
-    # 从后往前遍历中间步骤，以获取最近一次的因果分析结果
-    for step in reversed(intermediate_steps):
-        action, observation = step
-        
-        if action.tool == 'perform_causal_analysis':
-            try:
-                # observation 是从 McpTool 返回的原始 JSON 字符串
-                analysis_data = json.loads(observation)
-                if analysis_data.get("success"):
-                    logging.info("在中间步骤中找到并处理了 'perform_causal_analysis' 的成功调用。")
-                    # 返回与旧版 `ai_call` 兼容的结构
-                    return {
-                        "type": "causal_graph",
-                        "summary": final_output_summary,  # 这是 Agent 生成的最终总结
-                        "data": analysis_data.get("data") # 这是工具返回的原始绘图数据
-                    }
-            except (json.JSONDecodeError, TypeError):
-                logging.error(f"无法解析来自因果分析工具的JSON响应: {observation}。将继续查找或返回纯文本。")
-            # 如果解析失败或 "success" 不为 true，循环会继续，查找更早的调用
+    # 检查是否生成了因果图
+    # 在我们当前的占位符逻辑中，这需要更明确的信号
+    # 但我们可以检查 'causal_analysis_result' 是否存在
+    if final_state_data.get("causal_analysis_result") and final_state_data.get("final_report"):
+        analysis_data = final_state_data["causal_analysis_result"]
+        if analysis_data.get("success"):
+            logging.info("在最终状态中找到因果分析结果，返回结构化响应。")
+            return {
+                "type": "causal_graph",
+                "summary": final_state_data["final_report"],
+                "data": analysis_data.get("data")
+            }
 
-    # 如果循环结束都没有找到成功的因果分析调用，则执行默认行为
-    # 对于普通聊天或其它工具的调用，直接返回 Agent 的总结
-    logging.info("返回纯文本总结。")
+    # 默认返回最终报告或普通聊天内容
+    final_output_summary = final_state_data.get("final_report", "抱歉，我在处理时遇到了问题。")
+    logging.info("Graph 正常结束，返回纯文本总结。")
     return {"type": "text", "summary": final_output_summary}
 
 

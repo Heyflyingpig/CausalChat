@@ -186,3 +186,6 @@ test.py
 
 # cursor
 .cursor/
+
+# causalcopliot
+causalcopliot/
