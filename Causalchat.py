@@ -38,7 +38,7 @@ from typing import Any, Type, List
 from pydantic import BaseModel, create_model, Field
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 # ------------------------------------
 
@@ -77,12 +77,13 @@ mcp_process_stack = AsyncExitStack()
 background_loop: asyncio.AbstractEventLoop | None = None
 rag_chain = None
 llm = None
+agent_graph = None
 # -------------------------
 
 
 def initialize_llm():
     """在应用启动时初始化全局LLM实例。"""
-    global llm
+    global llm, agent_graph
     # 使用新的配置对象
     if not all([settings.MODEL, settings.BASE_URL, settings.API_KEY]):
         logging.error("LLM 配置不完整，无法初始化。")
@@ -97,6 +98,12 @@ def initialize_llm():
         streaming=False,
     )
     logging.info("LLM 实例初始化成功。")
+
+    # --- 新增：在 LLM 初始化后立即创建 Agent Graph ---
+    logging.info("正在根据 LLM 实例创建 Agent Graph...")
+    agent_graph = create_graph(llm)
+    logging.info("Agent Graph 创建成功。")
+    # ---------------------------------------------
     return True
 
 
@@ -644,12 +651,13 @@ class KnowledgeBaseTool(BaseTool):
 
 
 # --- 核心修改：用 LangGraph 替换 ai_call ---
-from causal_agent.graph import agent_graph
+from causal_agent.graph import create_graph
 from causal_agent.state import CausalChatState
 
 async def ai_call(text, user_id, username, session_id):
     """
     使用我们模块化的 LangGraph agent 来处理用户请求。
+
     """
     # 1. 获取历史消息
     history_messages_raw = get_chat_history(session_id, user_id, limit=20)
@@ -669,10 +677,14 @@ async def ai_call(text, user_id, username, session_id):
         user_id=user_id,
         username=username,
         session_id=session_id,
+        
         tool_call_request=None,
         analysis_parameters=None,
+        
         causal_analysis_result=None,
         knowledge_base_result=None,
+        postprocess_result = None,
+        
         final_report=None,
         ask_human=None,
     )

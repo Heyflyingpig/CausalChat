@@ -1,0 +1,44 @@
+from typing import TypedDict, List, Optional, Any
+from langchain_core.messages import BaseMessage
+
+class CausalChatState(TypedDict):
+    """
+    Represents the state of our graph. This TypedDict acts as the "memory"
+    or "state" that is passed between all the nodes in the graph.
+
+    Attributes:
+        messages: The history of messages in the conversation.
+        user_id: The ID of the current user.
+        username: The name of the current user.
+        session_id: The ID of the current chat session.
+        
+        # Fields for tool interaction & data processing
+        tool_call_request: Optional[dict]
+        analysis_parameters: Optional[dict]
+
+        # Fields for storing results from tools
+        causal_analysis_result: Optional[dict]
+        knowledge_base_result: Optional[str]
+        
+        # 后处理补充结果
+        postprocess_result: Optional[dict]
+
+        # Fields for final output and flow control
+        final_report: Optional[str]
+        ask_human: Optional[str] # If not None, this is the question to ask the user, and the graph should pause.
+    """
+    messages: List[BaseMessage]
+    username: str
+    user_id: str
+    session_id: str
+
+    tool_call_request: Optional[dict]
+    analysis_parameters: Optional[dict]
+    
+    causal_analysis_result: Optional[dict]
+    knowledge_base_result: Optional[str]
+    postprocess_result: Optional[dict]
+
+    # 报告
+    final_report: Optional[str]
+    ask_human: Optional[str]
