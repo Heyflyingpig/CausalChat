@@ -14,7 +14,13 @@ class CausalChatState(TypedDict):
         
         # Fields for tool interaction & data processing
         tool_call_request: Optional[dict]
+
+        # 数据摘要
         analysis_parameters: Optional[dict]
+        # 数据源文件 (字符串格式，用于工具调用)
+        file_content: Optional[str] 
+        # 解析后的数据框 (Pandas DataFrame，用于内部处理)
+        dataframe: Optional[Any]
 
         # Fields for storing results from tools
         causal_analysis_result: Optional[dict]
@@ -33,7 +39,10 @@ class CausalChatState(TypedDict):
     session_id: str
 
     tool_call_request: Optional[dict]
+    
     analysis_parameters: Optional[dict]
+    file_content: Optional[str]
+    dataframe: Optional[Any]
     
     causal_analysis_result: Optional[dict]
     knowledge_base_result: Optional[str]

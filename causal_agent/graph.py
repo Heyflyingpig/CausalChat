@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 from .state import CausalChatState
 from . import nodes, edges
 
-def create_graph(llm: "ChatOpenAI"):
+def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
     """
     组件node和edge成为边
     """
@@ -13,14 +13,17 @@ def create_graph(llm: "ChatOpenAI"):
     # 使用 functools.partial 将 llm 实例绑定到节点函数上
     # 这使得节点在被 LangGraph 调用时，除了 state 之外，还能接收到 llm 对象
     agent_node_with_llm = partial(nodes.agent_node, llm=llm)
+    fold_node_with_llm = partial(nodes.fold_node, llm=llm)
     preprocess_node_with_llm = partial(nodes.preprocess_node, llm=llm)
     postprocess_node_with_llm = partial(nodes.postprocess_node, llm=llm)
+    execute_tools_node_with_session = partial(nodes.execute_tools_node, mcp_session=mcp_session)
     report_node_with_llm = partial(nodes.report_node, llm=llm)
 
     # Add all the nodes to the graph
     workflow.add_node("agent", agent_node_with_llm)
+    workflow.add_node("fold", fold_node_with_llm)
     workflow.add_node("preprocess", preprocess_node_with_llm)
-    workflow.add_node("execute_tools", nodes.execute_tools_node)
+    workflow.add_node("execute_tools", execute_tools_node_with_session)
     workflow.add_node("postprocess", postprocess_node_with_llm)
     workflow.add_node("report", report_node_with_llm)
     workflow.add_node("normal_chat", nodes.normal_chat_node)
@@ -35,16 +38,24 @@ def create_graph(llm: "ChatOpenAI"):
         edges.decision_router,
         {
             "preprocess": "preprocess",
-            "postprocess": "postprocess",
+            "fold": "fold",
             "normal_chat": "normal_chat"
         }
     )
+    workflow.add_conditional_edges(
+        "fold",
+        edges.fold_router,
+        {
+            "preprocess": "preprocess",
+            "ask_human": "ask_human"
+        }
+    )
+    
     workflow.add_conditional_edges(
         "preprocess",
         edges.preprocess_router,
         {
             "execute_tools": "execute_tools",
-            "ask_human": "ask_human"
         }
     )
     workflow.add_conditional_edges(
