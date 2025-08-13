@@ -3,7 +3,6 @@ from flask import Flask, jsonify, request, send_from_directory
 from openai import OpenAI
 import mysql.connector
 from mysql.connector import errorcode
-
 import os
 import uuid
 from datetime import datetime
@@ -98,12 +97,7 @@ def initialize_llm():
         streaming=False,
     )
     logging.info("LLM 实例初始化成功。")
-
-    # --- 新增：在 LLM 初始化后立即创建 Agent Graph ---
-    logging.info("正在根据 LLM 实例创建 Agent Graph...")
-    agent_graph = create_graph(llm)
-    logging.info("Agent Graph 创建成功。")
-    # ---------------------------------------------
+    # --- 新增：Agent Graph 的创建将推迟到 MCP 连接就绪后 ---
     return True
 
 
@@ -1310,6 +1304,12 @@ if __name__ == '__main__':
     if not mcp_session:
         logging.critical("MCP 初始化完成但会话无效。应用即将退出。")
         sys.exit(1)
+
+    # --- 核心修改：在拥有 llm 和 mcp_session 后，最终创建 Agent Graph ---
+    logging.info("正在根据 LLM 和 MCP 会话创建 Agent Graph...")
+    agent_graph = create_graph(llm, mcp_session)
+    logging.info("Agent Graph 创建成功。")
+    # --------------------------------------------------------------------
         
     logging.info("MCP 连接就绪，启动 Flask 应用服务器...")
     # 启动 Flask 应用
