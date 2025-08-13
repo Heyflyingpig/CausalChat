@@ -46,6 +46,8 @@ langchain==0.2.6
 langchain-core==0.2.10
 langchain-openai==0.1.14
 langchain_community==0.2.6
+langchain_charoma
+langgraph==0.6.3
 tiktoken==0.7.0
 
 # RAG & 数据处理相关
