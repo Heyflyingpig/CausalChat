@@ -28,7 +28,7 @@ def fold_router(state: CausalChatState) -> str:
     logging.info("--- 路由: 文件加载决策 ---")
     fold_process_decision = state["messages"][-1].content
     if "信息完备" in fold_process_decision:
-        logging.info("路由决策 -> 前往[执行工具]")
+        logging.info("路由决策 -> 前往[执行预处理]")
         return "preprocess"
     else:
         logging.info("路由决策 -> 前往[询问用户]")
