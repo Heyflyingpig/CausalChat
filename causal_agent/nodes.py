@@ -13,6 +13,8 @@ import pandas as pd
 import mysql.connector
 from mcp import ClientSession
 
+
+
 from config.settings import settings
 
 # --- 数据库辅助函数 ---
@@ -122,29 +124,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     state["messages"].append(response_message)
     return {"messages": state["messages"]}
 
-def get_data_summary(df: pd.DataFrame) -> dict:
-    """
-    从Pandas DataFrame中提取一个结构化的摘要。
-    """
-    summary = {}
-    summary['n_rows'] = len(df)
-    summary['n_cols'] = len(df.columns)
-    # 统计列名
-    summary['columns'] = df.columns.tolist()
-    
-    # 数据结构
-    data_types = {}
-    for col in df.columns:
-        if pd.api.types.is_numeric_dtype(df[col]):
-            if df[col].nunique() < 20:
-                 data_types[col] = 'Categorical (from Numeric)'
-            else:
-                 data_types[col] = 'Numeric'
-        else:
-            data_types[col] = 'Categorical'
-    summary['data_types'] = data_types
-    
-    return summary
+
 
 class foldQuery(BaseModel):
     """定义了预处理步骤中用于从用户对话里提取文件名的模型。"""
@@ -152,6 +132,10 @@ class foldQuery(BaseModel):
         None, 
         description="从用户对话中识别出的要分析的数据文件名。如果用户没有明确提及，请留空。"
     )
+
+## fold节点用到的函数
+from data_processing.fold_processing import get_data_summary
+from data_processing.fold_verify import validate_analysis
 
 class fold_processQuery(BaseModel):
     """定义fold节点决策的选项。"""
@@ -166,7 +150,6 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     2.  从数据库加载文件内容。
     3.  使用Pandas解析数据并生成摘要。
     4.  将所有结果存入状态。
-    5.  进行判断，如果参数充足，进入preprocessing节点，如果参数不充足，则进入人机循环节点
     """
     logging.info("--- 步骤: 文件加载与解析节点 ---")
     user_id = state.get("user_id")
@@ -196,8 +179,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             loaded_filename = filename
         else:
             file_content_bytes, loaded_filename = get_recent_file(user_id)
-    
-    
+
         if not file_content_bytes:
             raise FileNotFoundError("找不到任何可供分析的文件。请先上传一个CSV文件。")
 
@@ -237,7 +219,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     MessagesPlaceholder(variable_name="messages"),
 ])
     
-    runnable = prompt | llm.with_structured_output(PreprocessQuery)
+    runnable = prompt | llm.with_structured_output(fold_processQuery)
     
     logging.info("正在调用LLM进行严格的参数验证...")
     structured_response = runnable.invoke({
@@ -257,14 +239,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             "请问您想分析哪个是处理变量（Treatment），哪个是结果变量（Target）？"
         )
         response_message = AIMessage(content=f"决策：参数不全或无效，需要向用户确认。", name="preprocess")
-
-        return {
-            "messages": state["messages"] + [response_message], "ask_human": question ,
-            "file_content": state['file_content'],
-            "dataframe": state['dataframe'],
-            "analysis_parameters": state['analysis_parameters']
-        }
-
+        return {"messages": state["messages"] + [response_message], "ask_human": question}
 
 class PreprocessQuery(BaseModel):
     """定义Agent决策的选项。"""
