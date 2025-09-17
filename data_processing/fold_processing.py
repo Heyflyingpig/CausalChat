@@ -1,3 +1,4 @@
+from os import name
 import pandas as pd
 
 def get_data_summary(df: pd.DataFrame) -> dict:
@@ -90,7 +91,7 @@ def get_data_summary(df: pd.DataFrame) -> dict:
         # 临时储存列的详细信息
         col_profile = {}
         
-        # 基础统计
+        # 基础统计，计算缺失值
         # series.isna() 返回布尔掩码，标识缺失值
         col_profile['missing_count'] = int(series.isna().sum())
         col_profile['missing_ratio'] = float(series.isna().mean())
@@ -161,6 +162,7 @@ def get_data_summary(df: pd.DataFrame) -> dict:
             ]
             
             is_date_like = False
+            
             for pattern in date_patterns:
                 if str_series.str.match(pattern).sum() > len(str_series) * 0.8:
                     is_date_like = True
@@ -225,6 +227,7 @@ def get_data_summary(df: pd.DataFrame) -> dict:
         
         # 常数列
         'constant_columns': [col for col, col_profile in column_profiles.items() if col_profile['is_constant']],
+        
         # 高缺失率列
         'high_missing_columns': [col for col, col_profile in column_profiles.items() if col_profile['missing_ratio'] > 0.3],
         # 因果分析适宜性
@@ -241,3 +244,7 @@ def get_data_summary(df: pd.DataFrame) -> dict:
 
     
     return summary
+
+if __name__ == "__main__":
+    # 测试代码可以在这里添加
+    pass
