@@ -9,6 +9,7 @@ def validate_analysis(analysis_params: dict, target: str = None, treatment: str 
         
     Returns:
         tuple[bool, list[str],list[str]]: (是否通过验证, 问题列表, 建议列表)
+        对bool为大于0的情况返回False, 问题列表, 建议列表
     """
     issues = []
     recommends = []

@@ -127,51 +127,66 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
 
 class foldQuery(BaseModel):
-    """定义了预处理步骤中用于从用户对话里提取文件名的模型。"""
+    """从用户对话中提取文件名及因果分析所需的关键参数。"""
     filename: Optional[str] = Field(
-        None, 
-        description="从用户对话中识别出的要分析的数据文件名。如果用户没有明确提及，请留空。"
+        None,
+        description="从用户对话中识别出的要分析的数据文件名 (e.g., 'data.csv')。如果未明确提及，则留空。"
+    )
+    target: Optional[str] = Field(
+        None,
+        description="从用户对话中识别出的目标变量(target)或结果变量(outcome)。如果未提及，则留空。"
+    )
+    treatment: Optional[str] = Field(
+        None,
+        description="从用户对话中识别出的处理变量(treatment)或干预变量(intervention)。如果未提及，则留空。"
     )
 
 ## fold节点用到的函数
 from data_processing.fold_processing import get_data_summary
 from data_processing.fold_verify import validate_analysis
+from data_processing.data_visualize import generate_visualizations
 
-class fold_processQuery(BaseModel):
-    """定义fold节点决策的选项。"""
-    route: Literal["preprocess", "ask_human"] = Field(
-        ...,
-        description="根据参数验证的结果，决定是执行工具还是询问用户。"
-    )
+
 def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
-    文件加载与解析节点。
-    1.  使用LLM从对话中提取文件名。
+    文件加载、解析与验证节点。
+    1.  使用LLM从对话中一次性提取文件名、目标和处理变量。
     2.  从数据库加载文件内容。
-    3.  使用Pandas解析数据并生成摘要。
-    4.  将所有结果存入状态。
+    3.  运行 get_data_summary 进行全面的数据分析。
+    4.  调用 validate_analysis 进行严格的条件验证。
+    5.  根据验证结果，决策进入 'preprocess' 节点或 'ask_human' 节点。
     """
-    logging.info("--- 步骤: 文件加载与解析节点 ---")
+    logging.info("--- 步骤: 文件加载、解析与验证节点 ---")
     user_id = state.get("user_id")
 
-    # 1. 使用LLM提取文件名
+    # 1. 使用LLM一次性提取文件名和分析意图
     prompt = ChatPromptTemplate.from_messages([
         ("system",
-         """你是一个智能助手，你的任务是从用户的最新消息中识别出他们想要分析的文件名。
-如果用户明确提到了一个文件名（通常以 `.csv` 结尾），请提取它。
-如果用户只是说“分析数据”或“用最新的文件”，没有指定具体名称，请将 `filename` 字段留空。
+         """你是一个智能助手，你的任务是从用户的最新消息中识别出以下信息：
+1.  用户想要分析的文件名 (通常以 `.csv` 结尾)。
+2.  用户关心的目标变量 (target/outcome)。
+3.  用户想要评估效果的处理变量 (treatment/intervention)。
+
+- 如果用户明确提到了文件名，请提取它。
+- 如果用户只是说“分析数据”或“用最新的文件”，没有指定具体名称，请将 `filename` 字段留空。
+- 如果用户提到了目标或处理变量，请提取它们。如果没提，就留空。
 
 示例:
-- 用户: "用 `marketing_campaign.csv` 帮我分析一下..." -> 提取: `filename='marketing_campaign.csv'`
-- 用户: "分析一下我的数据" -> 提取: `filename=None`
+- 用户: "用 `marketing_campaign.csv` 帮我分析一下'销售额'和'促销活动'的关系..."
+  -> 提取: `filename='marketing_campaign.csv'`, `target='销售额'`, `treatment='促销活动'`
+- 用户: "分析一下我的数据，看看是什么影响了客户流失"
+  -> 提取: `filename=None`, `target='客户流失'`, `treatment=None`
+- 用户: "帮我跑一下最新的数据"
+  -> 提取: `filename=None`, `target=None`, `treatment=None`
 """),
         MessagesPlaceholder(variable_name="messages"),
     ])
     
     runnable = prompt | llm.with_structured_output(foldQuery)
     extracted = runnable.invoke({"messages": state["messages"]})
-    
     filename = extracted.filename
+    target = extracted.target
+    treatment = extracted.treatment
     
     try:
         if filename:
@@ -191,77 +206,132 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         error_msg = f"在文件加载或解析阶段发生错误: {e}"
         logging.error(error_msg, exc_info=True)
         return {"ask_human": error_msg}
-        
-## 也许会造成上下文超格
+    
+    ## 也许会造成上下文超格
     state['file_content'] = file_content_str
     state['dataframe'] = df
     state['analysis_parameters'] = data_summary
     
-    
-    prompt = ChatPromptTemplate.from_messages([
-    ("system",
-        """你是一位严谨的AI数据分析师。你的任务是基于用户需求和已加载的数据信息，判断是否可以立即开始因果分析。
-
-# 数据摘要
-你正在处理的数据包含以下信息：
-- **所有可用列名**: {columns}
-- **每列的数据类型**: {data_types}
-
-# 你的任务
-仔细阅读下面的对话历史，并结合以上数据摘要，严格判断 `target` (目标/结果变量) 和 `treatment` (处理/干预变量) 是否都已明确指定，并且它们都**真实存在于`所有可用列名`列表中**。
-
-# 你的决策选项
-1. `execute_tools`: **当** `target` 和 `treatment` 两个变量都已在对话中被明确提及，并且它们的名字都精确地出现在 `{columns}` 列表中时，选择此路径。
-**或者** 用户说明“请进行分析”而不描述任何参数,则证明分析全部参数，选择此路径
-2. `ask_human`: **在任何其他情况下**，比如缺少 `target`、缺少 `treatment`，或者指定的变量名不在 `{columns}` 列表中，都必须选择此路径。
-
-请做出你的决策。"""),
-    MessagesPlaceholder(variable_name="messages"),
-])
-    
-    runnable = prompt | llm.with_structured_output(fold_processQuery)
-    
-    logging.info("正在调用LLM进行严格的参数验证...")
-    structured_response = runnable.invoke({
-        "messages": state["messages"],
-        "columns": str(data_summary.get('columns', [])),
-        "data_types": str(data_summary.get('data_types', {}))
-    })
-    logging.info(f"LLM参数验证决策结果: {structured_response.route}")
-
-    if structured_response.route == 'execute_tools':
-        response_message = AIMessage(content="决策：参数验证通过，信息完备，进入执行工具模块。", name="preprocess")
-        return {"messages": state["messages"] + [response_message]}
-    else:
-        question = (
-            "我需要您帮助我明确一下分析的变量。根据您上传的数据，我看到的可用的列有：\n"
-            f"`{', '.join(data_summary.get('columns', []))}`\n\n"
-            "请问您想分析哪个是处理变量（Treatment），哪个是结果变量（Target）？"
-        )
-        response_message = AIMessage(content=f"决策：参数不全或无效，需要向用户确认。", name="preprocess")
-        return {"messages": state["messages"] + [response_message], "ask_human": question}
-
-class PreprocessQuery(BaseModel):
-    """定义Agent决策的选项。"""
-    route: Literal["execute_tools", "ask_human"] = Field(
-        ...,
-        description="根据参数验证的结果，决定是执行工具还是询问用户。"
+    # 4. 运行确定性验证
+    is_ready, issues, recommends = validate_analysis(
+        data_summary, 
+        target=target, 
+        treatment=treatment
     )
+
+    # 5. 根据验证结果决策
+    if is_ready == 0:
+        logging.info("验证通过，进入预处理节点。")
+        ## 这里是完全替换还是补充呢
+        state['analysis_parameters'].update({"target": target, "treatment": treatment})
+
+        # 针对建议，生成提示
+        if recommends:
+            recommend_message = AIMessage(content=f"温馨提示：\n- {'\n- '.join(recommends)}", name="fold")
+            state["messages"].append(recommend_message)
+        return state
+    
+    else:
+        logging.warning(f"验证失败，需要人工干预。原因: {', '.join(issues)}")
+        
+        # 对于issue中有存在变量缺失的情况的，进行修正询问，对于数据有问题，进行数据补充询问
+        has_param_issue = any("目标变量" in issue or "处理变量" in issue for issue in issues)
+        has_data_quality_issue = any("缺失" in issue or "样本量" in issue or "常数列" in issue or "高基数" in issue or "ID列" in issue for issue in issues)
+
+        call_to_action = "请您根据上述问题进行调整。" # 通用备用方案
+        if has_param_issue:
+            call_to_action = "请您根据上述问题，明确或修正'目标变量'和'处理变量'的指定。"
+        elif has_data_quality_issue:
+            call_to_action = "您的数据似乎存在一些质量问题。请您考虑对数据进行清洗，或上传一份新的文件。"
+        
+        columns_list = data_summary.get('columns', [])
+        question = (
+            "为了开始因果分析，我需要您的帮助来解决以下问题：\n"
+            f"- {'\n- '.join(issues)}\n\n"
+            f"作为参考，您的数据中包含以下可用列：\n`{', '.join(columns_list)}`\n\n"
+            f"**{call_to_action}**"
+        )
+        return {"ask_human": question}
+
 
 def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
-    项目预处理模块
-    加载用户上传的文件
-    对输入数据进行数据预处理
+    项目预处理模块:
+    1.  从状态(state)中加载 DataFrame 和数据摘要。
+    2.  调用 `generate_visualizations` 生成数据图表。
+        - 如果缺少可视化库 (seaborn, matplotlib)，会跳过此步并向用户发出警告。
+    3.  调用 LLM 对数据摘要进行自然语言总结。
+    4.  将图表和总结存入状态，然后直接进入下一步。
     """
-    logging.info("--- 步骤: 预处理与参数验证节点 ---")
-    
-    data_summary = state.get("analysis_parameters", {})
-    if not data_summary:
-        return {"ask_human": "抱歉，数据摘要信息丢失，无法进行参数验证。"}
+    logging.info("--- 步骤: 数据预处理与分析节点 ---")
 
-   
-    return {"messages": state["messages"] + [response_message], "ask_human": question}
+    df = state.get("dataframe")
+    analysis_parameters = state.get("analysis_parameters", {})
+
+    if df is None or not analysis_parameters:
+        error_msg = "无法执行预处理，因为数据或其摘要信息在状态中丢失。"
+        logging.error(error_msg)
+        return {"ask_human": error_msg}
+
+    # 2. 生成可视化图表 (带异常处理)
+    visualizations = {}
+    try:
+        visualizations = generate_visualizations(df, analysis_parameters)
+        state["visualizations"] = visualizations
+        logging.info("数据可视化图表已成功生成。")
+    
+    except Exception as e:
+        logging.error(f"生成数据可视化时发生未知错误: {e}", exc_info=True)
+        # 准备一条消息，通知用户未知错误
+        error_message = AIMessage(
+            content=f"生成数据可视化图表时遇到一个未知错误: {e}",
+            name="preprocess"
+        )
+        state["messages"].append(error_message)
+
+
+    # 3. 调用LLM进行自然语言总结
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system",
+             """你是一名资深的因果推断的数据分析师。你的任务是根据提供的数据摘要信息，为即将进行的因果分析撰写一段简洁明了的自然语言总结。
+
+# 数据摘要信息:
+{data_summary}
+
+# 你的任务:
+1.  **开篇总结**: 简要说明数据集的规模（行数和列数）。
+2.  **目标变量和处理变量的摘录**: 对输入数据中的“target”和“treatment”进行摘取，并告知用户目前处理的变量是这两个变量。
+3.  **风险提示**: 提及数据中存在的潜在问题，例如高缺失值列、常数列、高基数分类变量或疑似ID列。
+4.  **结论**: 给出一个总体评价，说明数据是否已准备好进行下一步的因果分析。
+
+请使用清晰、专业的语言，让非技术人员也能理解数据的基本状况。
+"""),
+        ]
+    )
+    
+    runnable = prompt | llm | StrOutputParser()
+    
+    logging.info("正在调用LLM生成数据分析总结...")
+    
+    
+    narrative_summary = runnable.invoke({
+        "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False)
+    })
+    logging.info(f"LLM数据总结结果: {narrative_summary}")
+
+    # 4. 更新状态
+    state["narrative_summary"] = narrative_summary
+    
+    summary_message = AIMessage(
+        content=narrative_summary,
+        name="preprocess"
+    )
+    state["messages"].append(summary_message)
+
+    return state
+
+
 
 def execute_tools_node(state: CausalChatState, mcp_session: ClientSession) -> dict:
     """
