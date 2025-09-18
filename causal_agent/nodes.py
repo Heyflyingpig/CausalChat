@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
-from typing import Literal, Optional, Any
+from typing import Literal, Optional, Any, List
 import logging
 import asyncio
 import json
@@ -16,6 +16,10 @@ from mcp import ClientSession
 
 
 from config.settings import settings
+from data_processing.fold_processing import get_data_summary
+from data_processing.fold_verify import validate_analysis
+from data_processing.data_visualize import generate_visualizations
+from knowledge_base.query_rag import get_rag_response
 
 # --- 数据库辅助函数 ---
 # 这些函数帮助节点与应用程序的数据库进行交互，以获取文件等资源。
@@ -145,6 +149,7 @@ class foldQuery(BaseModel):
 from data_processing.fold_processing import get_data_summary
 from data_processing.fold_verify import validate_analysis
 from data_processing.data_visualize import generate_visualizations
+from knowledge_base.query_rag import get_rag_response
 
 
 def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
@@ -333,59 +338,130 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
 
 
-def execute_tools_node(state: CausalChatState, mcp_session: ClientSession) -> dict:
+class RagQuestion(BaseModel):
+    """用于生成知识库查询问题的模型。"""
+    questions: List[str] = Field(
+        default_factory=list,
+        description="根据对话历史和数据摘要，为知识库生成一个或多个精确、具体的问题列表。"
+    )
+
+def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: ChatOpenAI) -> dict:
     """
-    执行工具模块（计算调用者）。
-    1.  从状态中获取由 `fold_node` 准备好的文件内容（原始字符串）。
-    2.  调用纯计算的 `perform_causal_analysis` MCP工具。
-    3.  处理返回结果并更新状态。
+    执行工具模块 (重构版)。
+    1.  **并行执行**: 同时启动因果分析 (通过MCP) 和知识库查询 (RAG)。
+    2.  **准备输入**: 
+        -   对于因果分析，从状态中获取文件内容的原始字符串。
+        -   对于知识库，首先调用LLM根据对话历史和数据摘要动态生成一个查询问题。
+    3.  **调用工具**:
+        -   异步调用 MCP 的 `perform_causal_analysis` 工具。
+        -   同步调用 RAG 的 `get_rag_response` 函数 (因其内部是同步的)。
+    4.  **结果处理**: 收集两个工具的返回结果，处理可能的异常，并更新状态。
     """
-    logging.info("--- 步骤: 执行工具节点 ---")
-    ## 工具箱
-    tools = []
-    ## 模拟工具调用成功
-    state["causal_analysis_result"] = {"success": True, "data": {"nodes": ["A", "B"], "edges": [["A", "B"]]}} # Placeholder
     
+    logging.info("--- 步骤: 执行工具节点 (并行版) ---")
+    
+    ## 获取编码的文件信息
     file_content = state.get("file_content")
 
-    if not file_content:
-        # 如果预处理没有成功加载数据，则无法继续
-        logging.warning("execute_tools_node：状态中缺少 'file_content'，无法执行工具。")
-        state["ask_human"] = "数据加载步骤似乎失败了，我无法执行分析。请您重试或检查文件。"
-        return state
+    ## 获取分析参数
+    analysis_parameters = state.get("analysis_parameters", {})
 
-    tool_call_kwargs = {"csv_data": file_content}
-    logging.info(f"正在调用 MCP 工具 'perform_causal_analysis'...")
+    # -MCP
+    async def run_causal_analysis_task():
+        logging.info("正在启动 MCP 工具 'perform_causal_analysis'...")
+        try:
+            tool_call_kwargs = {"csv_data": file_content}
+            tool_response_obj = await mcp_session.call_tool("perform_causal_analysis", tool_call_kwargs)
+            tool_response_text = tool_response_obj.content[0].text
+            tool_result = json.loads(tool_response_text)
+            logging.info("MCP 工具调用成功。")
+            return tool_result
+        except Exception as e:
+            logging.error(f"调用 MCP 工具时发生严重错误: {e}", exc_info=True)
+            return {"success": False, "message": f"执行分析工具时发生意外的系统错误: {e}"}
 
-    try:
-        async def call_tool_async():
-            return await mcp_session.call_tool("perform_causal_analysis", tool_call_kwargs)
+    # RAG ---
+    def run_rag_query_task():
+        logging.info("正在启动 RAG 知识库查询...")
+        try:
+            # 1. 调用LLM动态生成问题
+            rag_prompt = ChatPromptTemplate.from_messages([
+                ("system", 
+                 """你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题。
+
+# 对话历史:
+{messages}
+
+# 数据摘要:
+{data_summary}
+
+# 你的任务:
+综合以上信息，生成一个包含多个个问题的JSON列表，并赋值给 'questions' 字段。这些问题应该简洁、明确，旨在从知识库中检索信息，以帮助用户更好地理解当前分析的背景、方法论或潜在风险。
+
+例如:
+- 如果用户提到了'混杂因子'，你可以生成一个问题："什么是混杂因子，以及如何在因果分析中控制它？"
+- 如果数据显示有大量缺失值，你可以生成一个问题："数据缺失在因果分析中会引入哪些类型的偏倚？"
+- 如果分析涉及时间序列数据，你可以生成一个问题："在处理时间序列数据时，PC算法有哪些局限性？"
+
+请严格按照JSON格式输出一个问题列表。"""),
+            ])
+            
+            question_generator_runnable = rag_prompt | llm.with_structured_output(RagQuestion)
+            
+            logging.info("正在调用LLM生成RAG查询问题...")
+            
+            generated_question_obj = question_generator_runnable.invoke({
+                "messages": state["messages"],
+                "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False)
+            })
+            questions = generated_question_obj.questions
+            logging.info(f"LLM生成的RAG问题列表: {questions}")
+            
+            # 生成的回答是一个列表
+            rag_response = get_rag_response(questions)
+            logging.info("RAG 知识库查询成功。")
+            return {"success": True, "response": rag_response}
+        except Exception as e:
+            logging.error(f"执行 RAG 查询时发生错误: {e}", exc_info=True)
+            return {"success": False, "response": f"查询知识库时发生错误: {e}"}
+
+    # --- 并行执行与结果收集 ---
+    # asyncio.run 会启动事件循环来运行异步任务
+    # 我们在一个异步函数中运行RAG的同步代码，以更好地管理它
+    async def main_task():
+        causal_task = asyncio.create_task(run_causal_analysis_task())
         
-        tool_response_obj = asyncio.run(call_tool_async())
-        tool_response_text = tool_response_obj.content[0].text
-        tool_result = json.loads(tool_response_text)
+        # 在事件循环中运行同步的RAG任务
+        loop = asyncio.get_running_loop()
+        rag_result = await loop.run_in_executor(None, run_rag_query_task)
+        
+        causal_result = await causal_task
+        return causal_result, rag_result
 
-        if tool_result.get("success"):
-            state["causal_analysis_result"] = tool_result
-            response_message = AIMessage(
-                content="信息完备：工具执行完成，获得了因果分析结果。", 
-                name="execute_tools"
-            )
-            state["messages"].append(response_message)
-            return {
-                "causal_analysis_result": state["causal_analysis_result"],
-                "messages": state["messages"]
-            }
-        else:
-            error_message = tool_result.get("message", "未知工具错误")
-            logging.warning(f"工具执行失败: {error_message}")
-            state["ask_human"] = f"分析失败：{error_message}"
-            return {"ask_human": state["ask_human"]}
+    causal_analysis_result, knowledge_base_result = asyncio.run(main_task())
 
-    except Exception as e:
-        logging.error(f"调用 MCP 工具时发生严重错误: {e}", exc_info=True)
-        state["ask_human"] = f"执行分析工具时发生意外的系统错误: {e}"
-        return {"ask_human": state["ask_human"]}
+    # --- 更新状态 ---
+    state["causal_analysis_result"] = causal_analysis_result
+    state["knowledge_base_result"] = knowledge_base_result
+
+    # 根据主要工具（因果分析）的结果来决定下一步
+    if causal_analysis_result.get("success"):
+        response_message = AIMessage(
+            content="信息完备：工具执行完成，获得了因果分析和知识库查询结果。", 
+            name="execute_tools"
+        )
+        state["messages"].append(response_message)
+    
+    else:
+        error_message = causal_analysis_result.get("message", "未知工具错误")
+        logging.warning(f"工具执行失败: {error_message}")
+        response_message = AIMessage(
+            content=f"分析失败：{error_message}",
+            name="execute_tools"
+        )
+        state["messages"].append(response_message)
+
+    return state
 
 
 class PostprocessOutput(BaseModel):
@@ -413,18 +489,18 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         (
             "system",
             """你是一个专业的AI因果分析助手。
-你的任务是审查现有的分析结果，并判断是否需要补充额外的信息或参数，以生成一份更全面、更准确的因果分析报告。
+    你的任务是审查现有的分析结果，并判断是否需要补充额外的信息或参数，以生成一份更全面、更准确的因果分析报告。
 
-# 当前状态摘要
-1. 因果分析结果: {analysis_result}
-2. 知识库查询结果: {knowledge_base_result}
+    # 当前状态摘要
+    1. 因果分析结果: {analysis_result}
+    2. 知识库查询结果: {knowledge_base_result}
 
-# 你的任务
-1.  检查以上信息是否足以生成一份高质量的报告。
-2.  如果信息不完整，请在`supplemented_parameters`中**模拟**添加必要的参数。
-3.  在`explanation`字段中，清晰地解释你的决策。如果补充了参数，请说明补充了什么以及为什么；如果未补充，请确认信息完整。
+    # 你的任务
+    1.  检查以上信息是否足以生成一份高质量的报告。
+    2.  如果信息不完整，请在`supplemented_parameters`中**模拟**添加必要的参数。
+    3.  在`explanation`字段中，清晰地解释你的决策。如果补充了参数，请说明补充了什么以及为什么；如果未补充，请确认信息完整。
 
-请严格按照`PostprocessOutput`的格式输出。"""
+    请严格按照`PostprocessOutput`的格式输出。"""
         ),
         MessagesPlaceholder(variable_name="messages"),
     ])
