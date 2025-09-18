@@ -380,7 +380,7 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             logging.error(f"调用 MCP 工具时发生严重错误: {e}", exc_info=True)
             return {"success": False, "message": f"执行分析工具时发生意外的系统错误: {e}"}
 
-    # RAG ---
+    # RAG 
     def run_rag_query_task():
         logging.info("正在启动 RAG 知识库查询...")
         try:
@@ -388,9 +388,6 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             rag_prompt = ChatPromptTemplate.from_messages([
                 ("system", 
                  """你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题。
-
-# 对话历史:
-{messages}
 
 # 数据摘要:
 {data_summary}
@@ -403,7 +400,8 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
 - 如果数据显示有大量缺失值，你可以生成一个问题："数据缺失在因果分析中会引入哪些类型的偏倚？"
 - 如果分析涉及时间序列数据，你可以生成一个问题："在处理时间序列数据时，PC算法有哪些局限性？"
 
-请严格按照JSON格式输出一个问题列表。"""),
+请严格按照RagQuestion的格式输出一个问题列表。"""),
+                MessagesPlaceholder(variable_name="messages"),
             ])
             
             question_generator_runnable = rag_prompt | llm.with_structured_output(RagQuestion)
