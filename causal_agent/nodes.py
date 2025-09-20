@@ -196,6 +196,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     try:
         if filename:
             file_content_bytes = get_file_content(user_id, filename)
+            # 注意这里的文件名后续并没有用到
             loaded_filename = filename
         else:
             file_content_bytes, loaded_filename = get_recent_file(user_id)
@@ -210,8 +211,11 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     except Exception as e:
         error_msg = f"在文件加载或解析阶段发生错误: {e}"
         logging.error(error_msg, exc_info=True)
-        return {"ask_human": error_msg}
-    
+        state["ask_human"] = error_msg
+        recommend_message = AIMessage(content=f"决策：文件加载或解析阶段发生错误: {e}", name="fold")
+        state["messages"].append(recommend_message)
+        return state
+
     ## 也许会造成上下文超格
     state['file_content'] = file_content_str
     state['dataframe'] = df
@@ -228,12 +232,16 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     if is_ready == 0:
         logging.info("验证通过，进入预处理节点。")
         ## 这里是完全替换还是补充呢
+        recommend_message = AIMessage(content = "决策：信息完备，进入预处理节点。", name="fold")
+        state["messages"].append(recommend_message)
         state['analysis_parameters'].update({"target": target, "treatment": treatment})
+
 
         # 针对建议，生成提示
         if recommends:
-            recommend_message = AIMessage(content=f"温馨提示：\n- {'\n- '.join(recommends)}", name="fold")
+            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {'\n- '.join(recommends)}", name="fold")
             state["messages"].append(recommend_message)
+        
         return state
     
     else:
@@ -256,7 +264,10 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             f"作为参考，您的数据中包含以下可用列：\n`{', '.join(columns_list)}`\n\n"
             f"**{call_to_action}**"
         )
-        return {"ask_human": question}
+        state["ask_human"] = question
+        recommend_message = AIMessage(content=f"决策：信息不全，需要人工干预。{question}", name="fold")
+        state["messages"].append(recommend_message)
+        return state
 
 
 def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
@@ -276,7 +287,10 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     if df is None or not analysis_parameters:
         error_msg = "无法执行预处理，因为数据或其摘要信息在状态中丢失。"
         logging.error(error_msg)
-        return {"ask_human": error_msg}
+        state["ask_human"] = error_msg
+        recommend_message = AIMessage(content=f"决策：无法执行预处理，因为数据或其摘要信息在状态中丢失。", name="preprocess")
+        state["messages"].append(recommend_message)
+        return state
 
     # 2. 生成可视化图表 (带异常处理)
     visualizations = {}
@@ -358,7 +372,7 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     4.  **结果处理**: 收集两个工具的返回结果，处理可能的异常，并更新状态。
     """
     
-    logging.info("--- 步骤: 执行工具节点 (并行版) ---")
+    logging.info("--- 步骤: 执行工具节点 ---")
     
     ## 获取编码的文件信息
     file_content = state.get("file_content")
@@ -367,7 +381,7 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     analysis_parameters = state.get("analysis_parameters", {})
 
     # -MCP
-    async def run_causal_analysis_task():
+    async def run_mcp_task():
         logging.info("正在启动 MCP 工具 'perform_causal_analysis'...")
         try:
             tool_call_kwargs = {"csv_data": file_content}
@@ -423,17 +437,21 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             logging.error(f"执行 RAG 查询时发生错误: {e}", exc_info=True)
             return {"success": False, "response": f"查询知识库时发生错误: {e}"}
 
-    # --- 并行执行与结果收集 ---
     # asyncio.run 会启动事件循环来运行异步任务
     # 我们在一个异步函数中运行RAG的同步代码，以更好地管理它
     async def main_task():
-        causal_task = asyncio.create_task(run_causal_analysis_task())
+        # 首先对异步函数进行包装，包装成一个task对象
+        mcp_task = asyncio.create_task(run_mcp_task())
         
         # 在事件循环中运行同步的RAG任务
         loop = asyncio.get_running_loop()
+        # 让函数在这里暂停，处理两个任务，直到两个任务都完成
+        # 知识库查询是同步任务，同步任务如果和异步任务通过进行，会导致异步任务阻塞
+        # 所以在这一步需要抽出一个空闲线程来运行知识库查询任务
         rag_result = await loop.run_in_executor(None, run_rag_query_task)
         
-        causal_result = await causal_task
+        causal_result = await mcp_task
+        # 返回两个任务的结果
         return causal_result, rag_result
 
     causal_analysis_result, knowledge_base_result = asyncio.run(main_task())
@@ -449,15 +467,17 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             name="execute_tools"
         )
         state["messages"].append(response_message)
+        state["tool_call_request"] = True
     
     else:
         error_message = causal_analysis_result.get("message", "未知工具错误")
         logging.warning(f"工具执行失败: {error_message}")
         response_message = AIMessage(
-            content=f"分析失败：{error_message}",
+            content=f"决策：工具执行失败：{error_message}",
             name="execute_tools"
         )
         state["messages"].append(response_message)
+        state["tool_call_request"] = False
 
     return state
 
@@ -589,9 +609,12 @@ def normal_chat_node(state: CausalChatState) -> dict:
 def ask_human_node(state: CausalChatState) -> dict:
     """
     人机交互模块
-    主要是为了向用户询问更多信息，以便继续分析
+    此节点是图暂停以等待用户输入的地方。图的编译设置为在此节点运行之前中断。
+    主应用逻辑将从状态的 'ask_human' 字段中获取问题，并在获得用户响应后，
+    用更新过的消息历史恢复执行。
     """
-    logging.info("--- 步骤: 人机交互节点 ---")
-    question = "我需要更多信息才能继续。例如，您想分析哪个文件？" # Placeholder question
-    state["ask_human"] = question
-    return {"ask_human": state["ask_human"]}
+    logging.info("--- 步骤: 人机交互节点 (已从中断中恢复，继续执行) ---")
+    if "ask_human" in state:
+        state.pop("ask_human")
+
+    return state

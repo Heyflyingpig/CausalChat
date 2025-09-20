@@ -12,7 +12,7 @@ class CausalChatState(TypedDict):
         username: The name of the current user.
         session_id: The ID of the current chat session.
         
-        # Fields for tool interaction & data processing
+        # 是否调用工具
         tool_call_request: Optional[dict]
 
         # 数据摘要
@@ -38,7 +38,7 @@ class CausalChatState(TypedDict):
     user_id: str
     session_id: str
 
-    tool_call_request: Optional[dict]
+    tool_call_request: Optional[bool]
     
     analysis_parameters: Optional[dict]
     file_content: Optional[str]
@@ -46,8 +46,11 @@ class CausalChatState(TypedDict):
     
     causal_analysis_result: Optional[dict]
     knowledge_base_result: Optional[str]
+    
     postprocess_result: Optional[dict]
 
     # 报告
     final_report: Optional[str]
+    
+    # 中断
     ask_human: Optional[str]

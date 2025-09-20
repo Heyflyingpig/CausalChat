@@ -48,7 +48,7 @@ def preprocess_router(state: CausalChatState) -> str:
 def execute_tool_router(state:CausalChatState) -> str:
     """
     工具执行节点后的路由器。
-    这是新的关键决策点。
+    返回agent节点，等待agent节点做出决策
     """
     logging.info("--- 路由: 执行工具后决策 ---")
     logging.info(f"前往decision_router")
@@ -62,5 +62,11 @@ def postprocess_router(state:CausalChatState) -> str:
     logging.info(f"前往report_node")
     return "report"
 
-
+def ask_human_router(state:CausalChatState) -> str:
+    '''
+    人工干预之后，通向agent_node
+    '''
+    logging.info("--- 路由: 询问用户后决策 ---")
+    logging.info(f"前往agent_node")
+    return "agent"
 

@@ -73,19 +73,23 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
             "report": "report"
         }
     )
+    workflow.add_conditional_edges(
+        "ask_human",
+        edges.ask_human_router,
+        {
+            "agent": "agent"
+        }
+    )
  
     # Define the end points of the graph. A graph can have multiple finishing points.
     workflow.add_edge("report", END)
     workflow.add_edge("normal_chat", END)
     
-    # The 'ask_human' node is also a terminal state for a single run. The application
-    # logic will then pause, wait for user input, and start a new run on the graph.
-    workflow.add_edge("ask_human", END)
 
     # Compile the graph into a runnable application
-    app = workflow.compile()
+    # 通过设置 `interrupt_before`, 我们告诉图在执行 `ask_human` 节点之前暂停。
+    app = workflow.compile(interrupt_before=["ask_human"])
     
     return app
 
-# agent_graph 实例现在将在主应用中动态创建，而不是在模块加载时
 agent_graph = None
