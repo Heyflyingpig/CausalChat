@@ -58,4 +58,10 @@ pymupdf==1.24.7
 unstructured==0.14.9
 langchain-huggingface==0.0.3
 
+# 因果分析和图处理相关
+numpy>=1.24.0
+pandas>=2.0.0
+networkx>=3.0
+causal-learn>=0.1.3.3
+
 openai>=1.55.3
