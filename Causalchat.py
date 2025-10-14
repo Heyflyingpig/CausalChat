@@ -178,13 +178,13 @@ try:
     check_database_readiness()
 except RuntimeError as e:
     logging.critical(f"数据库未就绪，应用无法启动: {e}")
-    print(f"\n❌ 数据库错误: {e}")
+    print(f"\n 数据库错误: {e}")
     print("请先运行以下命令初始化数据库:")
     print("python database_init.py")
     sys.exit(1)
 except Exception as e:
     logging.critical(f"数据库检查失败，应用无法启动: {e}")
-    print(f"\n❌ 数据库检查失败: {e}")
+    print(f"\n 数据库检查失败: {e}")
     sys.exit(1)
 
 # 全局状态
@@ -369,7 +369,7 @@ def check_auth():
 
 
 
-# --- 全面重构：MCP生命周期管理与后台事件循环 ---
+# MCP生命周期管理与后台事件循环
 
 async def initialize_mcp_connection(ready_event: threading.Event):
     """
@@ -386,6 +386,7 @@ async def initialize_mcp_connection(ready_event: threading.Event):
         
         read_stream, write_stream = await mcp_process_stack.enter_async_context(stdio_client(server_params))
         session = await mcp_process_stack.enter_async_context(ClientSession(read_stream, write_stream))
+        
         await session.initialize()
         
         tools_response = await session.list_tools()
@@ -543,7 +544,7 @@ def initialize_rag_system():
 
 # --- 新增：LangChain Agent 的 MCP 工具封装 ---
 # 这里是对mcp格式的langchain翻译，翻译成一个类
-
+# 目前的逻辑下，并没有使用该方法
 def create_pydantic(schema: dict, model_name: str) -> Type[BaseModel]:
     """
     根据 MCP 工具提供的 JSON Schema 动态创建 Pydantic 模型。
@@ -552,7 +553,7 @@ def create_pydantic(schema: dict, model_name: str) -> Type[BaseModel]:
     fields = {}
     properties = schema.get('properties', {})
     required_fields = schema.get('required', [])
-
+    ## 转换为键值对应的列表
     for prop_name, prop_schema in properties.items():
         # 这里对类型做了简化映射，可以根据未来工具的复杂性进行扩展
         field_type: Type[Any] = str  # 默认为字符串类型
@@ -581,12 +582,9 @@ class McpTool(BaseTool):
     name: str
     description: str
     args_schema: Type[BaseModel]  # 强制工具必须有参数结构
-    session: "ClientSession"      # 类型前向引用
+    session: "ClientSession"      # 类型前向引用（类型前向引用指的是在类型注解中使用尚未在当前作用域定义的类型名）
     username: str
 
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
-        # 我们所有的工具都是异步的，所以同步执行方法直接报错
-        raise NotImplementedError("McpTool 不支持同步执行。")
  # mcp定于的异步执行方法 _arun表示这个方法可以接收任意数量的关键字参数，并将它们收集到一个名为 kwargs 的字典中
     async def _arun(self, **kwargs: Any) -> Any:
         """
@@ -648,11 +646,65 @@ class KnowledgeBaseTool(BaseTool):
 from causal_agent.graph import create_graph
 from causal_agent.state import CausalChatState
 
+# --- 新增：全局字典用于暂存中断的图状态 ---
+# 键：session_id，值：暂停的图状态
+interrupted_sessions = {}
+# ----------------------------------------
+
 async def ai_call(text, user_id, username, session_id):
     """
     使用我们模块化的 LangGraph agent 来处理用户请求。
-
+    支持中断和恢复机制。
     """
+    logging.info(f"处理用户 {username} 的消息，会话ID: {session_id}")
+    
+    # --- 新增：检查是否有暂停的会话需要恢复 ---
+    # 一开始是没有的
+    if session_id in interrupted_sessions:
+        logging.info(f"检测到会话 {session_id} 有暂停的图状态，正在恢复执行...")
+        
+        # 获取暂停的状态
+        # 为了区分用户
+        interrupted_state = interrupted_sessions[session_id]
+        
+        # 将用户的新输入添加到消息历史中
+        interrupted_state["messages"].append(HumanMessage(content=text))
+        
+        # 清除中断标志，因为我们即将恢复执行
+        if "ask_human" in interrupted_state:
+            del interrupted_state["ask_human"]
+        
+        # 清理全局存储
+        del interrupted_sessions[session_id]
+        
+        # 恢复图的执行
+        logging.info("正在恢复图的执行...")
+        try:
+            final_state = None
+            async for event in agent_graph.astream(interrupted_state):
+                final_state = event
+            
+            final_state_data = list(final_state.values())[0]
+            
+            # 检查恢复后是否又需要暂停
+            # 为ture
+            if final_state_data.get("ask_human"):
+                logging.info("图恢复执行后再次请求用户输入。")
+                interrupted_sessions[session_id] = final_state_data
+                return {
+                    "type": "human_input_required", 
+                    "summary": final_state_data["ask_human"],
+                    "session_paused": True
+                }
+            
+            # 正常处理完成的结果
+            return process_final_result(final_state_data)
+            
+        except Exception as e:
+            logging.error(f"恢复图执行时发生错误: {e}", exc_info=True)
+            return {"type": "text", "summary": f"恢复执行时出现错误: {e}"}
+    
+    # --- 原有逻辑：新会话的处理 ---
     # 1. 获取历史消息
     history_messages_raw = get_chat_history(session_id, user_id, limit=20)
     
@@ -677,7 +729,7 @@ async def ai_call(text, user_id, username, session_id):
         
         causal_analysis_result=None,
         knowledge_base_result=None,
-        postprocess_result = None,
+        postprocess_result=None,
         
         final_report=None,
         ask_human=None,
@@ -685,28 +737,37 @@ async def ai_call(text, user_id, username, session_id):
 
     # 4. 异步调用我们编译好的 LangGraph agent
     logging.info(f"正在为用户 {username} 调用 LangGraph Agent...")
-    # .astream() 会返回一个包含所有中间步骤状态的流
-    # 我们只需要最后一个最终状态
-    final_state = None
-    async for event in agent_graph.astream(initial_state):
-        final_state = event
-    
-    final_state_data = list(final_state.values())[0]
+    try:
+        final_state = None
+        async for event in agent_graph.astream(initial_state):
+            final_state = event
+        
+        final_state_data = list(final_state.values())[0]
 
+        # --- 新增：调试日志 ---
+        logging.info(f"完整的 Graph 最终状态: {final_state_data}")
 
-    # --- 新增：调试日志，打印完整的 Agent 响应结构 ---
-    logging.info(f"完整的 Graph 最终状态: {final_state_data}")
-    # ------------------------------------------------
+        # 5. 根据最终状态格式化响应
+        # 检查图是否需要暂停以等待用户输入
+        if final_state_data.get("ask_human"):
+            logging.info("Graph 请求用户输入，流程暂停。")
+            interrupted_sessions[session_id] = final_state_data
+            return {
+                "type": "human_input_required", 
+                "summary": final_state_data["ask_human"],
+                "session_paused": True
+            }
+        
+        # 正常处理完成的结果
+        return process_final_result(final_state_data)
+        
+    except Exception as e:
+        logging.error(f"执行 LangGraph Agent 时发生错误: {e}", exc_info=True)
+        return {"type": "text", "summary": f"处理请求时出现错误: {e}"}
 
-    # 5. 根据最终状态格式化响应
-    # 检查图是否需要暂停以等待用户输入
-    if final_state_data.get("ask_human"):
-        logging.info("Graph 请求用户输入，流程暂停。")
-        return {"type": "text", "summary": final_state_data["ask_human"]}
-    
+def process_final_result(final_state_data):
+    """处理图正常完成后的最终结果"""
     # 检查是否生成了因果图
-    # 在我们当前的占位符逻辑中，这需要更明确的信号
-    # 但我们可以检查 'causal_analysis_result' 是否存在
     if final_state_data.get("causal_analysis_result") and final_state_data.get("final_report"):
         analysis_data = final_state_data["causal_analysis_result"]
         if analysis_data.get("success"):
