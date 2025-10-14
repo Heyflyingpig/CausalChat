@@ -4,22 +4,20 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
-from typing import Literal, Optional, Any, List
+from typing import Literal, Optional, Any, List, Tuple, Dict
 import logging
 import asyncio
 import json
 import io
 import pandas as pd
+import numpy as np
+import networkx as nx
 import mysql.connector
 from mcp import ClientSession
 
 
 
 from config.settings import settings
-from data_processing.fold_processing import get_data_summary
-from data_processing.fold_verify import validate_analysis
-from data_processing.data_visualize import generate_visualizations
-from knowledge_base.query_rag import get_rag_response
 
 # --- 数据库辅助函数 ---
 # 这些函数帮助节点与应用程序的数据库进行交互，以获取文件等资源。
@@ -146,9 +144,9 @@ class foldQuery(BaseModel):
     )
 
 ## fold节点用到的函数
-from data_processing.fold_processing import get_data_summary
-from data_processing.fold_verify import validate_analysis
-from data_processing.data_visualize import generate_visualizations
+from Processing.fold_processing import get_data_summary
+from Processing.fold_verify import validate_analysis
+from Processing.data_visualize import generate_visualizations
 from knowledge_base.query_rag import get_rag_response
 
 
@@ -239,7 +237,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
         # 针对建议，生成提示
         if recommends:
-            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {'\n- '.join(recommends)}", name="fold")
+            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {'\n- '.join(recommends)}", )
             state["messages"].append(recommend_message)
         
         return state
@@ -292,7 +290,7 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         state["messages"].append(recommend_message)
         return state
 
-    # 2. 生成可视化图表 (带异常处理)
+    # 2. 生成可视化图表 
     visualizations = {}
     try:
         visualizations = generate_visualizations(df, analysis_parameters)
@@ -482,70 +480,124 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     return state
 
 
-class PostprocessOutput(BaseModel):
-    """后处理步骤的结构化输出，包含补充的参数和说明。"""
-    supplemented_parameters: Optional[dict] = Field(
-        default_factory=dict,
-        description="模拟补充的参数，以键值对形式存在。如果没有补充，则为空字典。"
-    )
-    explanation: str = Field(
-        ...,
-        description="向用户解释为什么补充了这些参数（如果补充了），以及这些参数对生成最终报告的影响。如果未补充，则说明结果已很完整。"
-    )
+
+# 环路检测模块
+from Postprocessing.cycles_check.detect_cycles import detect_cycles
+from Postprocessing.cycles_check.extract_causal_return import extract_adjacency_matrix
+from Postprocessing.cycles_check.fix_cycles import fix_cycles_with_llm
+
+
+# 边评估模块
+from Postprocessing.evaluate_edge.evaluate_edge_llm import evaluate_edges_with_llm
 
 def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
     后处理模块：
-    主要是对最后输出的参数，图进行最后的检查的处理
-    如果需要补充什么，模拟添加参数
+    1. 提取并验证因果图结构
+    2. 环路检测和修正
+    3. LLM辅助评估关键边的合理性
+    4. 准备修正记录和格式化数据供报告使用
+    
+    技术说明：
+        - 使用networkx进行图结构分析
+        - 使用LLM进行环路修正和边评估决策
+        - 所有修正操作都会被详细记录
     """
     logging.info("--- 步骤: 后处理节点 ---")
-    analysis_result = state["causal_analysis_result"]
-    knowledge_base_result = state["knowledge_base_result"]
-
-    prompt = ChatPromptTemplate.from_messages([
-        (
-            "system",
-            """你是一个专业的AI因果分析助手。
-    你的任务是审查现有的分析结果，并判断是否需要补充额外的信息或参数，以生成一份更全面、更准确的因果分析报告。
-
-    # 当前状态摘要
-    1. 因果分析结果: {analysis_result}
-    2. 知识库查询结果: {knowledge_base_result}
-
-    # 你的任务
-    1.  检查以上信息是否足以生成一份高质量的报告。
-    2.  如果信息不完整，请在`supplemented_parameters`中**模拟**添加必要的参数。
-    3.  在`explanation`字段中，清晰地解释你的决策。如果补充了参数，请说明补充了什么以及为什么；如果未补充，请确认信息完整。
-
-    请严格按照`PostprocessOutput`的格式输出。"""
-        ),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-
-    runnable = prompt | llm.with_structured_output(PostprocessOutput)
-
-    logging.info("正在调用LLM进行后处理决策...")
-    structured_response = runnable.invoke({
-        "messages": state["messages"],
-        "analysis_result": analysis_result,
-        "knowledge_base_result": knowledge_base_result
-    })
-    logging.info(f"LLM后处理决策结果: {structured_response}")
     
-    # 创建一条新的AI消息，向用户解释后处理步骤的决策
-    response_message = AIMessage(
-        content=structured_response.explanation,
-        name="postprocess"
-    )
-    
-    state["messages"].append(response_message)
-    state["postprocess_result"] = structured_response.dict()
+    try:
+        # 步骤1：提取原始因果图
+        analysis_result = state["causal_analysis_result"]
+        adjacency_matrix, node_names = extract_adjacency_matrix(analysis_result)
+        
+        # 如果提取失败，返回错误
+        if adjacency_matrix.size == 0:
+            error_msg = "无法从分析结果中提取有效的因果图数据。"
+            logging.error(error_msg)
+            state["messages"].append(AIMessage(content=f"决策：{error_msg}", name="postprocess"))
+            state["postprocess_result"] = {"error": error_msg}
+            return state
+        
+        logging.info(f"提取到 {len(node_names)} 个节点的因果图")
+        
+        # 创建原始图的副本用于修正
+        working_matrix = adjacency_matrix.copy()
+        
+        # 步骤2：环路检测和修正
+        has_cycle, cycles = detect_cycles(working_matrix, node_names)
+        if has_cycle:
+            logging.info(f"检测到 {len(cycles)} 个环路，开始LLM辅助修正...")
+            working_matrix = fix_cycles_with_llm(
+                working_matrix, 
+                cycles, 
+                node_names,
+                llm, 
+                state
+            )
+            # 再次检测以确认环路已被消除
+            has_cycle_after, _ = detect_cycles(working_matrix, node_names)
+            if has_cycle_after:
+                logging.warning("警告：部分环路仍然存在，可能需要人工干预。")
+            else:
+                logging.info("所有环路已成功修正！")
+        
+        # 步骤3：LLM评估关键边
+        analysis_parameters = state.get("analysis_parameters", {})
+        ananlysis_result = state.get(("causal_analysis_result"),{})
+        if isinstance(ananlysis_result, str):
+            critical_edges = ananlysis_result.get("raw_results", {}).get("edges", [])
+        else:
+            critical_edges = []
+        
+        edge_evaluations = {}
+        if critical_edges:
+            logging.info(f"识别到 {len(critical_edges)} 条关键边，开始LLM评估...")
+            edge_evaluations = evaluate_edges_with_llm(critical_edges, state, llm)
+        else:
+            logging.info("未识别到需要评估的关键边")
+        
+        
+        # 准备结构化输出
+        postprocess_result = {
+            "original_graph": state["causal_analysis_result"].get("data", {}),
+            "revised_graph": edge_evaluations.get("decision", []),
+            "revision_summary": edge_evaluations.get("reason", ""),
+            "had_cycles": has_cycle,
+            "num_cycles_fixed": len(cycles) if has_cycle else 0
+        }
+        
+        state["postprocess_result"] = postprocess_result
+        
+        
+        # 如果有环路被修正，添加额外说明
+        if has_cycle:
+            explanation = f"\n\n**注意**：原始图中检测到 {len(cycles)} 个环路，部分已通过LLM辅助决策进行修正。理由如下：{edge_evaluations.get('reason', '')}"      
+            response_message = AIMessage(
+                content=explanation,
+                name="postprocess"
+            )
+            state["messages"].append(response_message)
+        
+        response_message = AIMessage(
+            content="决策：后处理完成，准备进入报告生成阶段",
+            name="postprocess"
+        )
+        state["messages"].append(response_message)
 
-    return {
-        "messages": state["messages"],
-        "postprocess_result": state["postprocess_result"]
-    }
+        logging.info("后处理完成，准备进入报告生成阶段")
+        
+        return state
+        
+    except Exception as e:
+        state["postprocess_result"] = {"error": str(e) + f"\n\n将使用原始分析结果继续生成报告。"}
+        # 异常处理：记录错误但不中断流程
+        error_message = AIMessage(
+            content=f"后处理遇到问题: {str(e)}\n\n将使用原始分析结果继续生成报告。",
+            name="postprocess"
+        )
+        state["messages"].append(error_message)
+        
+        return state
 
 def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
