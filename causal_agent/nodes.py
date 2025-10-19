@@ -25,56 +25,9 @@ from causal_agent.back_prompt import data_prompt
 from causal_agent.back_prompt import causal_rag_prompt
 ## 报告人设
 from causal_agent.back_prompt import causal_report_prompt
-
-
-# --- 数据库辅助函数 ---
-# 这些函数帮助节点与应用程序的数据库进行交互，以获取文件等资源。
-def get_db_connection():
-    """创建并返回一个MySQL数据库连接。"""
-    try:
-        return mysql.connector.connect(
-            host=settings.MYSQL_HOST,
-            user=settings.MYSQL_USER,
-            password=settings.MYSQL_PASSWORD,
-            database=settings.MYSQL_DATABASE
-        )
-    except mysql.connector.Error as err:
-        logging.error(f"Agent Node: MySQL 连接错误: {err}")
-        raise
-
-def get_file_content(user_id: int, filename: str) -> bytes | None:
-    """从数据库为指定用户获取文件内容。"""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                "SELECT file_content FROM uploaded_files WHERE user_id = %s AND original_filename = %s ORDER BY last_accessed_at DESC LIMIT 1",
-                (user_id, filename)
-            )
-            result = cursor.fetchone()
-            return result['file_content'] if result else None
-    except mysql.connector.Error as e:
-        logging.error(f"Agent Node: 从数据库获取文件 '{filename}' (用户ID: {user_id}) 时出错: {e}")
-        return None
-
-def get_recent_file(user_id: int) -> tuple[bytes | None, str | None]:
-    """获取用户最近上传或访问的文件的内容和名称。"""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                "SELECT file_content, original_filename FROM uploaded_files WHERE user_id = %s ORDER BY last_accessed_at DESC LIMIT 1",
-                (user_id,)
-            )
-            result = cursor.fetchone()
-            if result:
-                return result['file_content'], result['original_filename']
-            return None, None
-    except mysql.connector.Error as e:
-        logging.error(f"Agent Node: 为用户 {user_id} 获取最近文件时出错: {e}")
-        return None, None
-
-# --- 1. 定义LLM决策的结构化输出模型 ---
+# 数据库
+from Database.agent_connect import get_file_content, get_recent_file
+# 定义LLM决策的结构化输出模型 ---
 class RouteQuery(BaseModel):
     """定义Agent决策的选项。"""
     route: Literal["postprocess", "fold", "normal_chat"] = Field(
@@ -84,6 +37,7 @@ class RouteQuery(BaseModel):
 
 # agentnode节点用于做初步的decision
 def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
+
     """
     Agent节点，是图的起点，用于判断是否需要进入causal循环，
     根据当前状态强制LLM做出三选一的决策，然后将该决策转化为消息。
@@ -93,27 +47,27 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     # 检查生成报告所需的结果是否已存在。
     has_tool_results = state.get('causal_analysis_result') is not None
     
-    # --- 3. 构建引导LLM决策的Prompt ---
+    # 构建引导LLM决策的Prompt ---
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", 
              """你是一个专业的AI助手路由中枢。你的任务是根据用户的对话历史和当前状态，决定下一步的最佳路径。
 
-# 当前状态摘要:
-- 是否已获得分析工具的结果: {has_tool_results}
+            # 当前状态摘要:
+            - 是否已获得分析工具的结果: {has_tool_results}
 
-# 你的决策选项:
-1. `postprocess`: 如果已经获得了因果分析结果 ({has_tool_results} is True)，可以选择此路径以进入后处理模块。
-2. `fold`: 如果用户想要进行因果分析 (例如，对话中提到“分析”、“处理数据”或与“因果推断”相关的用语)，但我们还没有分析结果 ({has_tool_results} is False)，选择此路径以启动文件加载模块。
-3. `normal_chat`: 如果用户的提问只是一个与因果领域不相关的消息，不需要调用任何复杂的因果分析工具，选择此路径。
+            # 你的决策选项:
+            1. `postprocess`: 如果已经获得了因果分析结果 ({has_tool_results} is True)，可以选择此路径以进入后处理模块。
+            2. `fold`: 如果用户想要进行因果分析 (例如，对话中提到“分析”、“处理数据”或与“因果推断”相关的用语)，但我们还没有分析结果 ({has_tool_results} is False)，选择此路径以启动文件加载模块。
+            3. `normal_chat`: 如果用户的提问只是一个与因果领域不相关的消息，不需要调用任何复杂的因果分析工具，选择此路径。
 
-请根据下面的对话历史，做出你的选择。"""),
+            请根据下面的对话历史，做出你的选择。"""),
             MessagesPlaceholder(variable_name="messages"),
         ]
     )
     
-    # --- 4. 构建并调用LLM链 ---
-    # .with_structured_output(RouteQuery) 是关键，它会强制LLM的输出符合RouteQuery的格式
+    # 构建并调用LLM链 
+
     runnable = prompt | llm.with_structured_output(RouteQuery)
     
     logging.info("正在调用LLM进行路由决策...")
@@ -123,7 +77,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     })
     logging.info(f"LLM决策结果: {structured_response.route}")
 
-    # --- 5. 根据LLM的结构化决策，生成用于路由的消息 ---
+    # 根据LLM的结构化决策，生成用于路由的消息 
     if structured_response.route == 'postprocess':
         response_message = AIMessage(content="决策：信息完备，进入后处理模块。", name="agent")
     elif structured_response.route == 'fold':
@@ -133,8 +87,6 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
     state["messages"].append(response_message)
     return {"messages": state["messages"]}
-
-
 
 class foldQuery(BaseModel):
     """从用户对话中提取文件名及因果分析所需的关键参数。"""
