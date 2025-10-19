@@ -35,7 +35,7 @@ class CausalChatState(TypedDict):
     """
     messages: List[BaseMessage]
     username: str
-    user_id: str
+    user_id: int
     session_id: str
 
     tool_call_request: Optional[bool]
@@ -47,6 +47,8 @@ class CausalChatState(TypedDict):
     causal_analysis_result: Optional[dict]
     knowledge_base_result: Optional[str]
     
+    preprocess_summary: Optional[str]
+    visualizations: Optional[dict]
     postprocess_result: Optional[dict]
 
     # 报告

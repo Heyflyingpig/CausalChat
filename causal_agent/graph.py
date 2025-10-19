@@ -15,8 +15,8 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
     agent_node_with_llm = partial(nodes.agent_node, llm=llm)
     fold_node_with_llm = partial(nodes.fold_node, llm=llm)
     preprocess_node_with_llm = partial(nodes.preprocess_node, llm=llm)
+    execute_tools_node_with_session = partial(nodes.execute_tools_node, mcp_session=mcp_session,llm=llm)
     postprocess_node_with_llm = partial(nodes.postprocess_node, llm=llm)
-    execute_tools_node_with_session = partial(nodes.execute_tools_node, mcp_session=mcp_session)
     report_node_with_llm = partial(nodes.report_node, llm=llm)
 
     # Add all the nodes to the graph
@@ -91,5 +91,6 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
     app = workflow.compile(interrupt_before=["ask_human"])
     
     return app
+
 
 agent_graph = None

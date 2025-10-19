@@ -7,15 +7,15 @@ def decision_router(state: CausalChatState) -> str:
     这是图中的主要“决策”边。
     它检查来自代理的最新消息以决定下一步行动。
     """
-    logging.info("--- 路由: 主决策 ---")
+    logging.info("路由: 主决策")
     agent_decision = state["messages"][-1].content
     
     if "信息完备" in agent_decision:
         logging.info("路由决策 -> 前往[后处理]")
-        return "postprocess"
+        return "preprocess"
     elif "信息不全" in agent_decision:
         logging.info("路由决策 -> 前往[文件加载]")
-        return "fold_router"
+        return "fold"
     else: # "普通问答" or any other default
         logging.info("路由决策 -> 前往[普通问答]")
         return "normal_chat"
@@ -40,7 +40,6 @@ def preprocess_router(state: CausalChatState) -> str:
     如果验证成功，则执行工具
     """
     logging.info("--- 路由: 预处理后决策 ---")
-    preprocess_decision = state["messages"][-1].content
     logging.info("路由决策 -> 参数充足, 前往[执行工具]")
     return "execute_tools"
 
