@@ -19,6 +19,14 @@ from mcp import ClientSession
 
 from config.settings import settings
 
+## 导入人设
+from causal_agent.back_prompt import data_prompt
+## 知识库查询人设
+from causal_agent.back_prompt import causal_rag_prompt
+## 报告人设
+from causal_agent.back_prompt import causal_report_prompt
+
+
 # --- 数据库辅助函数 ---
 # 这些函数帮助节点与应用程序的数据库进行交互，以获取文件等资源。
 def get_db_connection():
@@ -164,26 +172,26 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
     # 1. 使用LLM一次性提取文件名和分析意图
     prompt = ChatPromptTemplate.from_messages([
-        ("system",
-         """你是一个智能助手，你的任务是从用户的最新消息中识别出以下信息：
-1.  用户想要分析的文件名 (通常以 `.csv` 结尾)。
-2.  用户关心的目标变量 (target/outcome)。
-3.  用户想要评估效果的处理变量 (treatment/intervention)。
+            ("system",
+            """你是一个智能助手，你的任务是从用户的最新消息中识别出以下信息：
+            1.  用户想要分析的文件名 (通常以 `.csv` 结尾)。
+            2.  用户关心的目标变量 (target/outcome)。
+            3.  用户想要评估效果的处理变量 (treatment/intervention)。
 
-- 如果用户明确提到了文件名，请提取它。
-- 如果用户只是说“分析数据”或“用最新的文件”，没有指定具体名称，请将 `filename` 字段留空。
-- 如果用户提到了目标或处理变量，请提取它们。如果没提，就留空。
+            - 如果用户明确提到了文件名，请提取它。
+            - 如果用户只是说“分析数据”或“用最新的文件”，没有指定具体名称，请将 `filename` 字段留空。
+            - 如果用户提到了目标或处理变量，请提取它们。如果没提，就留空。
 
-示例:
-- 用户: "用 `marketing_campaign.csv` 帮我分析一下'销售额'和'促销活动'的关系..."
-  -> 提取: `filename='marketing_campaign.csv'`, `target='销售额'`, `treatment='促销活动'`
-- 用户: "分析一下我的数据，看看是什么影响了客户流失"
-  -> 提取: `filename=None`, `target='客户流失'`, `treatment=None`
-- 用户: "帮我跑一下最新的数据"
-  -> 提取: `filename=None`, `target=None`, `treatment=None`
-"""),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
+            示例:
+            - 用户: "用 `marketing_campaign.csv` 帮我分析一下'销售额'和'促销活动'的关系..."
+            -> 提取: `filename='marketing_campaign.csv'`, `target='销售额'`, `treatment='促销活动'`
+            - 用户: "分析一下我的数据，看看是什么影响了客户流失"
+            -> 提取: `filename=None`, `target='客户流失'`, `treatment=None`
+            - 用户: "帮我跑一下最新的数据"
+            -> 提取: `filename=None`, `target=None`, `treatment=None`
+            """),
+            MessagesPlaceholder(variable_name="messages"),
+        ])
     
     runnable = prompt | llm.with_structured_output(foldQuery)
     extracted = runnable.invoke({"messages": state["messages"]})
@@ -194,6 +202,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     try:
         if filename:
             file_content_bytes = get_file_content(user_id, filename)
+            
             # 注意这里的文件名后续并没有用到
             loaded_filename = filename
         else:
@@ -210,6 +219,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         error_msg = f"在文件加载或解析阶段发生错误: {e}"
         logging.error(error_msg, exc_info=True)
         state["ask_human"] = error_msg
+        
         recommend_message = AIMessage(content=f"决策：文件加载或解析阶段发生错误: {e}", name="fold")
         state["messages"].append(recommend_message)
         return state
@@ -290,7 +300,7 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         state["messages"].append(recommend_message)
         return state
 
-    # 2. 生成可视化图表 
+    # 生成可视化图表 
     visualizations = {}
     try:
         visualizations = generate_visualizations(df, analysis_parameters)
@@ -306,42 +316,46 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         )
         state["messages"].append(error_message)
 
-
     # 3. 调用LLM进行自然语言总结
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system",
-             """你是一名资深的因果推断的数据分析师。你的任务是根据提供的数据摘要信息，为即将进行的因果分析撰写一段简洁明了的自然语言总结。
+             """
+             system role: {system_role}
+             mission:
+            你的任务是根据提供的数据摘要信息，为即将进行的因果分析撰写一段简洁明了的自然语言总结。
 
-# 数据摘要信息:
-{data_summary}
+            # 数据摘要信息:
+            {data_summary}
 
-# 你的任务:
-1.  **开篇总结**: 简要说明数据集的规模（行数和列数）。
-2.  **目标变量和处理变量的摘录**: 对输入数据中的“target”和“treatment”进行摘取，并告知用户目前处理的变量是这两个变量。
-3.  **风险提示**: 提及数据中存在的潜在问题，例如高缺失值列、常数列、高基数分类变量或疑似ID列。
-4.  **结论**: 给出一个总体评价，说明数据是否已准备好进行下一步的因果分析。
+            # 你的任务:
+            1.  **开篇总结**: 简要说明数据集的规模（行数和列数）。
+            2.  **目标变量和处理变量的摘录**: 对输入数据中的“target”和“treatment”进行摘取，并告知用户目前处理的变量是这两个变量。
+            3.  **风险提示**: 提及数据中存在的潜在问题，例如高缺失值列、常数列、高基数分类变量或疑似ID列。
+            4.  **结论**: 给出一个总体评价，说明数据是否已准备好进行下一步的因果分析。
 
-请使用清晰、专业的语言，让非技术人员也能理解数据的基本状况。
-"""),
+            请使用清晰、专业的语言，让非技术人员也能理解数据的基本状况。
+            """),
         ]
     )
+    
     
     runnable = prompt | llm | StrOutputParser()
     
     logging.info("正在调用LLM生成数据分析总结...")
     
     
-    narrative_summary = runnable.invoke({
-        "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False)
+    preprocess_summary = runnable.invoke({
+        "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False),
+        "system_role": data_prompt()
     })
-    logging.info(f"LLM数据总结结果: {narrative_summary}")
+    logging.info(f"LLM数据总结结果: {preprocess_summary}")
 
     # 4. 更新状态
-    state["narrative_summary"] = narrative_summary
+    state["preprocess_summary"] = preprocess_summary
     
     summary_message = AIMessage(
-        content=narrative_summary,
+        content= "决策：数据预处理完成，进入工具处理路由",
         name="preprocess"
     )
     state["messages"].append(summary_message)
@@ -393,26 +407,30 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             return {"success": False, "message": f"执行分析工具时发生意外的系统错误: {e}"}
 
     # RAG 
+
     def run_rag_query_task():
         logging.info("正在启动 RAG 知识库查询...")
         try:
             # 1. 调用LLM动态生成问题
             rag_prompt = ChatPromptTemplate.from_messages([
                 ("system", 
-                 """你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题。
+                 """
+                 system role: {system_role}
+                
+                你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题。
 
-# 数据摘要:
-{data_summary}
+                # 数据摘要:
+                {data_summary}
 
-# 你的任务:
-综合以上信息，生成一个包含多个个问题的JSON列表，并赋值给 'questions' 字段。这些问题应该简洁、明确，旨在从知识库中检索信息，以帮助用户更好地理解当前分析的背景、方法论或潜在风险。
+                # 你的任务:
+                综合以上信息，生成一个包含多个个问题的JSON列表，并赋值给 'questions' 字段。这些问题应该简洁、明确，旨在从知识库中检索信息，以帮助用户更好地理解当前分析的背景、方法论或潜在风险。
 
-例如:
-- 如果用户提到了'混杂因子'，你可以生成一个问题："什么是混杂因子，以及如何在因果分析中控制它？"
-- 如果数据显示有大量缺失值，你可以生成一个问题："数据缺失在因果分析中会引入哪些类型的偏倚？"
-- 如果分析涉及时间序列数据，你可以生成一个问题："在处理时间序列数据时，PC算法有哪些局限性？"
+                例如:
+                - 如果用户提到了'混杂因子'，你可以生成一个问题："什么是混杂因子，以及如何在因果分析中控制它？"
+                - 如果数据显示有大量缺失值，你可以生成一个问题："数据缺失在因果分析中会引入哪些类型的偏倚？"
+                - 如果分析涉及时间序列数据，你可以生成一个问题："在处理时间序列数据时，PC算法有哪些局限性？"
 
-请严格按照RagQuestion的格式输出一个问题列表。"""),
+                请严格按照RagQuestion的格式输出一个问题列表。"""),
                 MessagesPlaceholder(variable_name="messages"),
             ])
             
@@ -422,7 +440,8 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             
             generated_question_obj = question_generator_runnable.invoke({
                 "messages": state["messages"],
-                "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False)
+                "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False),
+                "system_role": causal_rag_prompt()
             })
             questions = generated_question_obj.questions
             logging.info(f"LLM生成的RAG问题列表: {questions}")
@@ -506,7 +525,7 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     logging.info("--- 步骤: 后处理节点 ---")
     
     try:
-        # 步骤1：提取原始因果图
+        # 提取原始因果图
         analysis_result = state["causal_analysis_result"]
         adjacency_matrix, node_names = extract_adjacency_matrix(analysis_result)
         
@@ -523,7 +542,7 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         # 创建原始图的副本用于修正
         working_matrix = adjacency_matrix.copy()
         
-        # 步骤2：环路检测和修正
+        # 环路检测和修正
         has_cycle, cycles = detect_cycles(working_matrix, node_names)
         if has_cycle:
             logging.info(f"检测到 {len(cycles)} 个环路，开始LLM辅助修正...")
@@ -538,10 +557,11 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             has_cycle_after, _ = detect_cycles(working_matrix, node_names)
             if has_cycle_after:
                 logging.warning("警告：部分环路仍然存在，可能需要人工干预。")
+
             else:
                 logging.info("所有环路已成功修正！")
         
-        # 步骤3：LLM评估关键边
+        # LLM评估关键边
         analysis_parameters = state.get("analysis_parameters", {})
         ananlysis_result = state.get(("causal_analysis_result"),{})
         if isinstance(ananlysis_result, str):
@@ -599,6 +619,7 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         
         return state
 
+
 def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
     报告模块：
@@ -614,7 +635,8 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             (
                 ("system",
                  """
-                 你是一个专业的AI助手的路由中枢。
+                 system role: {system_role}
+                 
                  你的任务是根据用户的对话历史和当前状态，按照要求的报告格式生成一份综合的，完整的因果领域报告
                  # 当前状态摘要
                  1. 因果分析结果：{causal_analysis_result}
@@ -640,7 +662,8 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         "messages": state["messages"],
         "causal_analysis_result": causal_analysis_result,
         "knowledge_base_result": knowledge_base_result,
-        "postprocess_result": postprocess_result
+        "postprocess_result": postprocess_result,
+        "system_role": causal_report_prompt()
     })
 
     logging.info(f"LLM报告结果: {response}")
