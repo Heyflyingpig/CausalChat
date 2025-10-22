@@ -12,7 +12,7 @@ def decision_router(state: CausalChatState) -> str:
     
     if "信息完备" in agent_decision:
         logging.info("路由决策 -> 前往[后处理]")
-        return "preprocess"
+        return "postprocess"
     elif "信息不全" in agent_decision:
         logging.info("路由决策 -> 前往[文件加载]")
         return "fold"

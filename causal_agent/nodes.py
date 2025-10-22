@@ -1,5 +1,5 @@
 from .state import CausalChatState
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
@@ -14,6 +14,8 @@ import numpy as np
 import networkx as nx
 import mysql.connector
 from mcp import ClientSession
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 
 
 
@@ -27,7 +29,10 @@ from causal_agent.back_prompt import causal_rag_prompt
 from causal_agent.back_prompt import causal_report_prompt
 # 数据库
 from Database.agent_connect import get_file_content, get_recent_file
-# 定义LLM决策的结构化输出模型 ---
+# 处理llm的输出，提取json对象
+from tool_node.excute_output import excute_output
+# 定义LLM决策的结构化输出模型 
+
 class RouteQuery(BaseModel):
     """定义Agent决策的选项。"""
     route: Literal["postprocess", "fold", "normal_chat"] = Field(
@@ -47,11 +52,8 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     # 检查生成报告所需的结果是否已存在。
     has_tool_results = state.get('causal_analysis_result') is not None
     
-    # 构建引导LLM决策的Prompt ---
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", 
-             """你是一个专业的AI助手路由中枢。你的任务是根据用户的对话历史和当前状态，决定下一步的最佳路径。
+    agent_prompt = """
+    你是一个专业的AI助手路由中枢。你的任务是根据用户的对话历史和当前状态，决定下一步的最佳路径。
 
             # 当前状态摘要:
             - 是否已获得分析工具的结果: {has_tool_results}
@@ -61,26 +63,50 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             2. `fold`: 如果用户想要进行因果分析 (例如，对话中提到“分析”、“处理数据”或与“因果推断”相关的用语)，但我们还没有分析结果 ({has_tool_results} is False)，选择此路径以启动文件加载模块。
             3. `normal_chat`: 如果用户的提问只是一个与因果领域不相关的消息，不需要调用任何复杂的因果分析工具，选择此路径。
 
-            请根据下面的对话历史，做出你的选择。"""),
+            请根据下面的对话历史，做出你的选择。
+            你必须按照RouteQuery返回一个只包含 "route" 键的 JSON 对象格式来返回你的决策。
+            **绝对不要**在你的回复中包含任何Markdown格式（例如 ```json ... ```）。
+            例如:
+            {{
+                "route": "postprocess"
+            }}
+            """
+    # 构建引导LLM决策的Prompt 
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", agent_prompt),
             MessagesPlaceholder(variable_name="messages"),
         ]
     )
     
-    # 构建并调用LLM链 
-
-    runnable = prompt | llm.with_structured_output(RouteQuery)
+    # 强制模型使用JSON模式，这是更可靠的方法
+    structured_llm = llm.bind(
+        response_format={"type": "json_object"}
+    )
+    
+    # 构建并调用LLM链
+    runnable = prompt | structured_llm | JsonOutputParser()
     
     logging.info("正在调用LLM进行路由决策...")
-    structured_response = runnable.invoke({
-        "messages": state["messages"],
-        "has_tool_results": has_tool_results
-    })
-    logging.info(f"LLM决策结果: {structured_response.route}")
+    try:
+        decision_dict = runnable.invoke({
+            "messages": state["messages"],
+            "has_tool_results": has_tool_results
+        })
+        # 用Pydantic模型解析和验证这个字典
+        structured_response = RouteQuery.model_validate(decision_dict)
+        route_decision = structured_response.route
+
+    except Exception as e:
+        # 这里的异常可能来自JSON解析，也可能来自Pydantic验证
+        logging.warning(f"无法从LLM响应中解析或验证路由决策: {e}。将回退到 normal_chat。")
+
+    logging.info(f"LLM决策结果: {route_decision}")
 
     # 根据LLM的结构化决策，生成用于路由的消息 
-    if structured_response.route == 'postprocess':
+    if route_decision == 'postprocess':
         response_message = AIMessage(content="决策：信息完备，进入后处理模块。", name="agent")
-    elif structured_response.route == 'fold':
+    elif route_decision == 'fold':
         response_message = AIMessage(content="决策：信息不全，启动文件加载模块。", name="agent")
     else: # 'normal_chat'
         response_message = AIMessage(content="决策：普通问答。", name="agent")
@@ -125,7 +151,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     # 1. 使用LLM一次性提取文件名和分析意图
     prompt = ChatPromptTemplate.from_messages([
             ("system",
-            """你是一个智能助手，你的任务是从用户的最新消息中识别出以下信息：
+            """你是一个智能助手，你的任务是从用户的最新消息中识别出以下信息，并以JSON格式返回：
             1.  用户想要分析的文件名 (通常以 `.csv` 结尾)。
             2.  用户关心的目标变量 (target/outcome)。
             3.  用户想要评估效果的处理变量 (treatment/intervention)。
@@ -141,20 +167,46 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             -> 提取: `filename=None`, `target='客户流失'`, `treatment=None`
             - 用户: "帮我跑一下最新的数据"
             -> 提取: `filename=None`, `target=None`, `treatment=None`
+            
+            你必须严格按照 `foldQuery` 的 schema 返回一个 JSON 对象。
+            **绝对不要**在你的回复中包含任何Markdown格式或解释性文字。
+
+            示例输出:
+            {{
+                "filename": "marketing_campaign.csv",
+                "target": "销售额",
+                "treatment": "促销活动"
+            }}
+
+            ## 特殊情况
+            - 用户: "用 `marketing_campaign.csv` 帮我分析一下'销售额'和'促销活动'的关系..."
+            -> 提取: `filename='marketing_campaign.csv'`, `target='销售额'`, `treatment='促销活动'`
+            - 用户: "分析一下我的数据，看看是什么影响了客户流失"
+            -> 提取: `filename=None`, `target='客户流失'`, `treatment=None`
+            - 用户: "帮我跑一下最新的数据"
+            -> 提取: `filename=None`, `target=None`, `treatment=None`
+            
             """),
             MessagesPlaceholder(variable_name="messages"),
         ])
-    
-    runnable = prompt | llm.with_structured_output(foldQuery)
-    extracted = runnable.invoke({"messages": state["messages"]})
-    filename = extracted.filename
-    target = extracted.target
-    treatment = extracted.treatment
-    
+    try:
+        runnable = prompt | llm | JsonOutputParser()
+        response = runnable.invoke({"messages": state["messages"]})
+
+        structured_response = foldQuery.model_validate(response)
+
+        filename = structured_response.filename
+        target = structured_response.target
+        treatment = structured_response.treatment
+    except Exception as e:
+        logging.error(f"无法从LLM响应中解析或验证提取信息: {e}。将返回错误值")
+        filename = None
+        target = None
+        treatment = None
+
     try:
         if filename:
             file_content_bytes = get_file_content(user_id, filename)
-            
             # 注意这里的文件名后续并没有用到
             loaded_filename = filename
         else:
@@ -199,7 +251,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
         # 针对建议，生成提示
         if recommends:
-            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {'\n- '.join(recommends)}", )
+            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {recommends}", )
             state["messages"].append(recommend_message)
         
         return state
@@ -220,7 +272,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         columns_list = data_summary.get('columns', [])
         question = (
             "为了开始因果分析，我需要您的帮助来解决以下问题：\n"
-            f"- {'\n- '.join(issues)}\n\n"
+            f"- {issues}\n\n"
             f"作为参考，您的数据中包含以下可用列：\n`{', '.join(columns_list)}`\n\n"
             f"**{call_to_action}**"
         )
@@ -267,7 +319,7 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             name="preprocess"
         )
         state["messages"].append(error_message)
-
+    
     # 3. 调用LLM进行自然语言总结
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -288,6 +340,7 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
             请使用清晰、专业的语言，让非技术人员也能理解数据的基本状况。
             """),
+            ("human", "请根据上述指示和提供的数据摘要，生成总结报告。")
         ]
     )
     
@@ -323,7 +376,8 @@ class RagQuestion(BaseModel):
         description="根据对话历史和数据摘要，为知识库生成一个或多个精确、具体的问题列表。"
     )
 
-def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: ChatOpenAI) -> dict:
+
+def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: ChatOpenAI, loop: asyncio.AbstractEventLoop) -> dict:
     """
     执行工具模块 (重构版)。
     1.  **并行执行**: 同时启动因果分析 (通过MCP) 和知识库查询 (RAG)。
@@ -331,9 +385,9 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
         -   对于因果分析，从状态中获取文件内容的原始字符串。
         -   对于知识库，首先调用LLM根据对话历史和数据摘要动态生成一个查询问题。
     3.  **调用工具**:
-        -   异步调用 MCP 的 `perform_causal_analysis` 工具。
-        -   同步调用 RAG 的 `get_rag_response` 函数 (因其内部是同步的)。
-    4.  **结果处理**: 收集两个工具的返回结果，处理可能的异常，并更新状态。
+        -   使用 `run_coroutine_threadsafe` 在主事件循环上异步调用 MCP 的 `perform_causal_analysis` 工具。
+        -   在一个新的守护线程中同步调用 RAG 的 `get_rag_response` 函数。
+    4.  **结果处理**: 等待两个任务完成，收集结果，处理可能的异常，并更新状态。
     """
     
     logging.info("--- 步骤: 执行工具节点 ---")
@@ -344,88 +398,95 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     ## 获取分析参数
     analysis_parameters = state.get("analysis_parameters", {})
 
-    # -MCP
-    async def run_mcp_task():
+    # 定义 MCP 异步任务 
+    async def run_mcp_task_async():
         logging.info("正在启动 MCP 工具 'perform_causal_analysis'...")
         try:
             tool_call_kwargs = {"csv_data": file_content}
             tool_response_obj = await mcp_session.call_tool("perform_causal_analysis", tool_call_kwargs)
             tool_response_text = tool_response_obj.content[0].text
-            tool_result = json.loads(tool_response_text)
-            logging.info("MCP 工具调用成功。")
-            return tool_result
+            return json.loads(tool_response_text)
         except Exception as e:
             logging.error(f"调用 MCP 工具时发生严重错误: {e}", exc_info=True)
-            return {"success": False, "message": f"执行分析工具时发生意外的系统错误: {e}"}
+            return {"success": False, "message": str(e)}
 
-    # RAG 
-
-    def run_rag_query_task():
+    # 定义 RAG 同步任务 
+    def run_rag_query_task_sync():
         logging.info("正在启动 RAG 知识库查询...")
         try:
-            # 1. 调用LLM动态生成问题
             rag_prompt = ChatPromptTemplate.from_messages([
                 ("system", 
                  """
                  system role: {system_role}
                 
-                你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题。
+                你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题，提出{num_questions}个问题
 
                 # 数据摘要:
                 {data_summary}
 
+                # 数据预处理总结:
+                {preprocess_summary}
+
                 # 你的任务:
                 综合以上信息，生成一个包含多个个问题的JSON列表，并赋值给 'questions' 字段。这些问题应该简洁、明确，旨在从知识库中检索信息，以帮助用户更好地理解当前分析的背景、方法论或潜在风险。
 
-                例如:
-                - 如果用户提到了'混杂因子'，你可以生成一个问题："什么是混杂因子，以及如何在因果分析中控制它？"
-                - 如果数据显示有大量缺失值，你可以生成一个问题："数据缺失在因果分析中会引入哪些类型的偏倚？"
-                - 如果分析涉及时间序列数据，你可以生成一个问题："在处理时间序列数据时，PC算法有哪些局限性？"
+                **你必须严格按照 `RagQuestion` 的 schema 返回一个 JSON 对象。**
+                **绝对不要在你的回复中包含任何Markdown格式或解释性文字。**
 
-                请严格按照RagQuestion的格式输出一个问题列表。"""),
-                MessagesPlaceholder(variable_name="messages"),
+                示例输出:
+                {{
+                    "questions": ["什么是混杂因子，以及如何在因果分析中控制它？", "数据缺失在因果分析中会引入哪些类型的偏倚？", "在处理时间序列数据时，PC算法有哪些局限性？"]
+                }}
+                """),
+                ("human", "请根据上述指示和提供的数据摘要，生成问题列表。，注意请只生成json对象，不要包含任何其他文字。")
             ])
             
-            question_generator_runnable = rag_prompt | llm.with_structured_output(RagQuestion)
+            question_generator_runnable = rag_prompt | llm | JsonOutputParser()
             
             logging.info("正在调用LLM生成RAG查询问题...")
             
-            generated_question_obj = question_generator_runnable.invoke({
+            llm_output = question_generator_runnable.invoke({
                 "messages": state["messages"],
                 "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False),
-                "system_role": causal_rag_prompt()
+                "preprocess_summary": state.get("preprocess_summary", ""),
+                "system_role": causal_rag_prompt(),
+                "num_questions": 3 # 暂时硬编码
             })
-            questions = generated_question_obj.questions
-            logging.info(f"LLM生成的RAG问题列表: {questions}")
+
+            try:
+                response = RagQuestion.model_validate(llm_output)
+
+            except Exception as e:
+                logging.error(f"Could not parse JSON from LLM response: {e}\nRaw response: {llm_output}")
+                return {"success": False, "response": ["无法生成RAG问题"]}
+            
+            logging.info(f"LLM生成的RAG问题列表: {response.questions}")
             
             # 生成的回答是一个列表
-            rag_response = get_rag_response(questions)
+            rag_response = get_rag_response(response.questions)
             logging.info("RAG 知识库查询成功。")
             return {"success": True, "response": rag_response}
         except Exception as e:
             logging.error(f"执行 RAG 查询时发生错误: {e}", exc_info=True)
-            return {"success": False, "response": f"查询知识库时发生错误: {e}"}
+            return {"success": False, "response": str(e)}
 
-    # asyncio.run 会启动事件循环来运行异步任务
-    # 我们在一个异步函数中运行RAG的同步代码，以更好地管理它
-    async def main_task():
-        # 首先对异步函数进行包装，包装成一个task对象
-        mcp_task = asyncio.create_task(run_mcp_task())
-        
-        # 在事件循环中运行同步的RAG任务
-        loop = asyncio.get_running_loop()
-        # 让函数在这里暂停，处理两个任务，直到两个任务都完成
-        # 知识库查询是同步任务，同步任务如果和异步任务通过进行，会导致异步任务阻塞
-        # 所以在这一步需要抽出一个空闲线程来运行知识库查询任务
-        rag_result = await loop.run_in_executor(None, run_rag_query_task)
-        
-        causal_result = await mcp_task
-        # 返回两个任务的结果
-        return causal_result, rag_result
+    # 并行执行任务并等待结果 
+    logging.info("--- 开始并行执行因果分析和RAG查询 ---")
+    
+    # 将异步的MCP任务安全地提交到主事件循环
+    mcp_future = asyncio.run_coroutine_threadsafe(run_mcp_task_async(), loop)
+    
+    # 使用线程池来执行同步的RAG任务
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        rag_future = executor.submit(run_rag_query_task_sync)
+    
+    # 阻塞并等待两个任务的结果
+    causal_analysis_result = mcp_future.result()  
+    knowledge_base_result = rag_future.result()
+    
+    logging.info("--- 因果分析和RAG查询均已完成 ---")
 
-    causal_analysis_result, knowledge_base_result = asyncio.run(main_task())
-
-    # --- 更新状态 ---
+    # 更新状态 
     state["causal_analysis_result"] = causal_analysis_result
     state["knowledge_base_result"] = knowledge_base_result
 
@@ -579,42 +640,42 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     
     """
     logging.info("--- 步骤: 报告模块 ---")
-    causal_analysis_result = state["causal_analysis_result"]
-    knowledge_base_result = state["knowledge_base_result"]
-    postprocess_result = state["postprocess_result"]
+    # 分离 system prompt 和 messages placeholder
+    system_prompt_template = (
+        """
+         system role: {system_role}
+         
+         你的任务是根据用户的对话历史和当前状态，按照要求的报告格式生成一份综合的，完整的因果领域报告
+         # 当前状态摘要
+         1. 因果分析结果：{causal_analysis_result}
+         2. 知识库结果：{knowledge_base_result}
+         3. 后处理结果：{postprocess_result}
+         
+         # 报告格式要求
+         1. 报告格式为markdown格式
+         2. 报告内容包括：
+            - 分析总结：需要概括性的总结因果分析结果
+            - 分析过程：需要详细描述分析的过程
+            - 分析结果：总结分析                          
+         """
+    )
+    
     prompt = ChatPromptTemplate.from_messages(
         [
-            (
-                ("system",
-                 """
-                 system role: {system_role}
-                 
-                 你的任务是根据用户的对话历史和当前状态，按照要求的报告格式生成一份综合的，完整的因果领域报告
-                 # 当前状态摘要
-                 1. 因果分析结果：{causal_analysis_result}
-                 2. 知识库结果：{knowledge_base_result}
-                 3. 后处理结果：{postprocess_result}
-                 
-                 # 报告格式要求
-                 1. 报告格式为markdown格式
-                 2. 报告内容包括：
-                    - 分析总结：需要概括性的总结因果分析结果
-                    - 分析过程：需要详细描述分析的过程
-                    - 分析结果：总结分析                          
-                 """
-                 
-                 ),
-                MessagesPlaceholder(variable_name="messages"),
-            )
+            ("system", system_prompt_template),
+            MessagesPlaceholder(variable_name="messages"),
         ]
     )
+
     # 格式化字符串输出
     runnable = prompt | llm | StrOutputParser()
+    
+    # 在invoke时，将模板变量和消息历史分开传入
     response = runnable.invoke({
         "messages": state["messages"],
-        "causal_analysis_result": causal_analysis_result,
-        "knowledge_base_result": knowledge_base_result,
-        "postprocess_result": postprocess_result,
+        "causal_analysis_result": state.get("causal_analysis_result", {}),
+        "knowledge_base_result": state.get("knowledge_base_result", {}),
+        "postprocess_result": state.get("postprocess_result", {}),
         "system_role": causal_report_prompt()
     })
 

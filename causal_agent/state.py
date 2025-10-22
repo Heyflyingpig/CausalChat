@@ -40,6 +40,7 @@ class CausalChatState(TypedDict):
 
     tool_call_request: Optional[bool]
     
+    ## 从Pandas DataFrame中提取一个结构化的摘要，包含因果推断所需的详细统计信息。
     analysis_parameters: Optional[dict]
     file_content: Optional[str]
     dataframe: Optional[Any]
@@ -48,7 +49,6 @@ class CausalChatState(TypedDict):
     knowledge_base_result: Optional[str]
     
     preprocess_summary: Optional[str]
-    visualizations: Optional[dict]
     postprocess_result: Optional[dict]
 
     # 报告
@@ -56,3 +56,6 @@ class CausalChatState(TypedDict):
     
     # 中断
     ask_human: Optional[str]
+    
+    # 可视化结果
+    visualizations: Optional[dict]

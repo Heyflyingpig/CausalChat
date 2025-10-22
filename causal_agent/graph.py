@@ -1,10 +1,10 @@
 from functools import partial
 from langgraph.graph import StateGraph, END
-
 from .state import CausalChatState
 from . import nodes, edges
+import asyncio
 
-def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
+def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession", loop: "asyncio.AbstractEventLoop"):
     """
     组件node和edge成为边
     """
@@ -15,7 +15,7 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
     agent_node_with_llm = partial(nodes.agent_node, llm=llm)
     fold_node_with_llm = partial(nodes.fold_node, llm=llm)
     preprocess_node_with_llm = partial(nodes.preprocess_node, llm=llm)
-    execute_tools_node_with_session = partial(nodes.execute_tools_node, mcp_session=mcp_session,llm=llm)
+    execute_tools_node_with_session = partial(nodes.execute_tools_node, mcp_session=mcp_session,llm=llm, loop=loop)
     postprocess_node_with_llm = partial(nodes.postprocess_node, llm=llm)
     report_node_with_llm = partial(nodes.report_node, llm=llm)
 
@@ -37,9 +37,9 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
         "agent",
         edges.decision_router,
         {
-            "preprocess": "preprocess",
             "fold": "fold",
-            "normal_chat": "normal_chat"
+            "normal_chat": "normal_chat",
+            "postprocess": "postprocess"
         }
     )
     workflow.add_conditional_edges(
