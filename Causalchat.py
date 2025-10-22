@@ -17,17 +17,12 @@ from contextlib import AsyncExitStack
 import threading
 import hashlib
 
-
-# --- 新增：从新的配置模块导入设置 ---
 try:
     from config.settings import settings
 except (ValueError, FileNotFoundError) as e:
     logging.critical(f"无法加载应用配置，程序终止。错误: {e}")
     sys.exit(1)
-# ------------------------------------
 
-
-# --- 新增：LangChain Agent 相关导入 ---
 from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -39,9 +34,8 @@ from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-# ------------------------------------
 
-# --- 新增：为 Windows 设置 asyncio 事件循环策略 ---
+
 # 在 Windows 上，默认的 asyncio 事件循环 (SelectorEventLoop) 不支持子进程。
 # MCP 客户端需要通过子进程启动服务器，因此我们必须切换到 ProactorEventLoop。
 # 这行代码必须在任何 asyncio 操作（尤其是创建事件循环）之前执行。
@@ -51,6 +45,9 @@ if sys.platform == "win32":
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# 再次获取根logger并显式设置级别，以防被其他库覆盖
+logging.getLogger().setLevel(logging.INFO)
 
 
 app = Flask(__name__, static_folder='static')
@@ -642,14 +639,13 @@ class KnowledgeBaseTool(BaseTool):
 
 
 
-# --- 核心修改：用 LangGraph 替换 ai_call ---
+
 from causal_agent.graph import create_graph
 from causal_agent.state import CausalChatState
 
-# --- 新增：全局字典用于暂存中断的图状态 ---
+
 # 键：session_id，值：暂停的图状态
 interrupted_sessions = {}
-# ----------------------------------------
 
 async def ai_call(text, user_id, username, session_id):
     """
@@ -704,7 +700,6 @@ async def ai_call(text, user_id, username, session_id):
             logging.error(f"恢复图执行时发生错误: {e}", exc_info=True)
             return {"type": "text", "summary": f"恢复执行时出现错误: {e}"}
     
-    # --- 原有逻辑：新会话的处理 ---
     # 1. 获取历史消息
     history_messages_raw = get_chat_history(session_id, user_id, limit=20)
     
@@ -744,7 +739,6 @@ async def ai_call(text, user_id, username, session_id):
         
         final_state_data = list(final_state.values())[0]
 
-        # --- 新增：调试日志 ---
         logging.info(f"完整的 Graph 最终状态: {final_state_data}")
 
         # 5. 根据最终状态格式化响应
@@ -1330,7 +1324,6 @@ if __name__ == '__main__':
     # 注册应用退出时的清理函数
     atexit.register(shutdown_mcp_connection)
 
-    # --- 全新启动流程 ---
     # 1. 初始化 LLM
     if not initialize_llm():
         logging.critical("LLM 初始化失败，应用无法启动。")
@@ -1366,12 +1359,11 @@ if __name__ == '__main__':
         logging.critical("MCP 初始化完成但会话无效。应用即将退出。")
         sys.exit(1)
 
-    # --- 核心修改：在拥有 llm 和 mcp_session 后，最终创建 Agent Graph ---
     logging.info("正在根据 LLM 和 MCP 会话创建 Agent Graph...")
-    agent_graph = create_graph(llm, mcp_session)
+    
+    agent_graph = create_graph(llm, mcp_session, background_event_loop)
     logging.info("Agent Graph 创建成功。")
-    # --------------------------------------------------------------------
-        
+    # -------------------------------------------------------------------- 
     logging.info("MCP 连接就绪，启动 Flask 应用服务器...")
     # 启动 Flask 应用
     # use_reloader=False 是必须的，因为重载器会启动一个子进程，

@@ -5,14 +5,12 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-# --- 跨平台路径定义 ---
 # 使用os.path.join确保路径在Windows和Linux上都能正常工作
 base_dir = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(base_dir, "models", "bge-small-zh-v1.5")
 SOURCE_DIRECTORY = os.path.join(base_dir, "source")
 PERSIST_DIRECTORY = os.path.join(base_dir, "db")
 
-# --- 选择并配置Embedding模型 ---
 # 我们将从本地加载模型，避免网络问题
 print("正在加载本地Embedding模型...")
 model_kwargs = {'device': 'cpu'} # 如果你有支持CUDA的NVIDIA显卡，可以改成 {'device': 'cuda'}
@@ -63,7 +61,6 @@ def build():
     except Exception as e:
         print(f"扫描目录 {SOURCE_DIRECTORY} 时发生错误: {e}")
         return
-    # --- 修改结束 ---
 
     if not documents:
         print("警告: 未加载到任何文档。请检查SOURCE_DIRECTORY路径是否正确，以及其中是否包含.txt和.pdf文件。")

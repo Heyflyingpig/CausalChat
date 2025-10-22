@@ -102,7 +102,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
     # 指定要测试的CSV文件路径（相对于项目根目录）
-    test_csv_path = 'MCPdemo/文档/1.csv'
+    test_csv_path = '杂项/test/1.csv'
     
     print(f"--- 开始独立测试 run_pc_analysis，使用文件: {test_csv_path} ---")
     

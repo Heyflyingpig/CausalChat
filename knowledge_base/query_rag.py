@@ -36,8 +36,7 @@ secrets = load_secrets()
 llm = ChatOpenAI(
     api_key=secrets.get("API_KEY"),
     base_url=secrets.get("BASE_URL"),
-    model_name=secrets.get("MODEL"),
-    temperature=0.0 # 对于RAG，我们希望答案基于事实，所以温度设为0
+    model_name=secrets.get("MODEL"), 
 )
 
 # 2. 加载与构建时相同的本地Embedding模型
@@ -110,6 +109,7 @@ def get_rag_response(questions: List[str]) -> str:
     # 使用换行符将所有格式化后的问答对连接成一个单独的字符串
     return "\n\n".join(response_parts)
 
+## 测试
 def query(question: str):
     """
     使用RAG链查询并打印答案

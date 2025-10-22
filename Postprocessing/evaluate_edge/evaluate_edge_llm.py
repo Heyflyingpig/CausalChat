@@ -6,11 +6,12 @@ from causal_agent.state import CausalChatState
 import json
 import logging
 
+from causal_agent.back_prompt import evaluate_edge_prompt
 
 class EdgeEvaluation(BaseModel):
     """LLM对边的评估结果。"""
 
-    decision: Literal = Field(
+    decision: List[str] = Field(
         ...,
         description="一个合理的边列表，格式为[“起点变量名 --> 终点变量名”, “起点变量名 --> 终点变量名”, ...]"
     )
@@ -55,30 +56,30 @@ def evaluate_edges_with_llm(
     logging.info(f"开始LLM评估 {len(critical_edges)} 条关键边...")
     try:
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是因果推断领域的专家。请评估以下因果边的合理性。
+            ("system", """
+            system role: {system_role}
 
-    # 边信息
-    边：{critical_edges}
+            # 边信息
+            边：{critical_edges}
 
-    # 参考信息
-    数据特征摘要：
-    {data_summary}
+            # 参考信息
+            数据特征摘要：
+            {data_summary}
 
-    相关领域知识：
-    {knowledge_knowledge}
+            相关领域知识：
+            {knowledge_knowledge}
 
-    # 修改决策
-    一个合理的边列表，格式如下：
-    [“起点变量名 --> 终点变量名”, “起点变量名 --> 终点变量名”, ...]
+            # 修改决策
+            一个合理的边列表，格式如下：
+            [“起点变量名 --> 终点变量名”, “起点变量名 --> 终点变量名”, ...]
 
-    # 修改原则
-    1. 除非是极其不合理，否则倾向于保留原边
-    2. 参考领域常识和专业知识
-    3. 考虑时序关系和逻辑依赖
-    4. 评估统计关联的合理性
-    5. 如果不确定，倾向于保留原边
+            # 修改原则
+            1. 除非是极其不合理，否则倾向于保留原边
+            2. 考虑时序关系和逻辑依赖,量化修正对最终因果图的影响
+            3. 对每个修正决策提供充分的因果学理由
+            4. 明确指出修正的理论依据（如违反时间顺序、生物学不可能等），参考领域常识和专业知识
 
-    请给出你的修改决策。"""),
+            请给出你的修改决策。"""),
             ])
             
         runnable = prompt | llm.with_structured_output(EdgeEvaluation)
@@ -86,7 +87,8 @@ def evaluate_edges_with_llm(
         evaluation = runnable.invoke({
             "final_edges": critical_edges,
             "data_summary": json.dumps(analysis_parameters, ensure_ascii=False, indent=2),
-            "relevant_knowledge": knowledge_excerpt
+            "relevant_knowledge": knowledge_excerpt,
+            "system_role": evaluate_edge_prompt()
         })
         
         logging.info(f"  修改后列表: {evaluation.decision}, 理由: {evaluation.reason[:50]}...")

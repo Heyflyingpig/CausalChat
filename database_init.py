@@ -481,11 +481,11 @@ def main():
         success = db_init.initialize_all(create_procedures=create_procedures)
         
         if success:
-            print("\n✅ 优化数据库初始化成功完成！")
+            print("\n数据库初始化成功完成！")
             print("数据库已按照大规模数据场景进行优化。")
             print("现在可以启动主应用程序了。")
         else:
-            print("\n❌ 数据库初始化失败！")
+            print("\n数据库初始化失败！")
             print("请检查日志文件 database_init.log 获取详细信息。")
             sys.exit(1)
             
