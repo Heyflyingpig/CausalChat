@@ -689,7 +689,18 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     logging.info(f"LLM报告结果: {response}")
     
     state["final_report"] = response
-    return {"final_report": state["final_report"]}
+    
+
+    report_complete_message = AIMessage(
+        content="决策：因果分析报告已生成完成。",
+        name="report"
+    )
+    state["messages"].append(report_complete_message)
+    
+    return {
+        "final_report": state["final_report"],
+        "messages": state["messages"]
+    }
 
 def normal_chat_node(state: CausalChatState,llm: ChatOpenAI) -> dict:
     """
