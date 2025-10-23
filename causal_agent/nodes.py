@@ -12,13 +12,10 @@ import io
 import pandas as pd
 import numpy as np
 import networkx as nx
-import mysql.connector
 from mcp import ClientSession
-import threading
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
-
-
+## 基本配置
 from config.settings import settings
 
 ## 导入人设
@@ -31,7 +28,6 @@ from causal_agent.back_prompt import causal_report_prompt
 from Database.agent_connect import get_file_content, get_recent_file
 # 处理llm的输出，提取json对象
 from tool_node.excute_output import excute_output
-# 定义LLM决策的结构化输出模型 
 
 class RouteQuery(BaseModel):
     """定义Agent决策的选项。"""
@@ -53,8 +49,10 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     has_tool_results = state.get('causal_analysis_result') is not None
     
     agent_prompt = """
-    你是一个专业的AI助手路由中枢。你的任务是根据用户的对话历史和当前状态，决定下一步的最佳路径。
-
+            你是一个专业的AI助手路由中枢。你的任务是根据用户的对话历史和当前状态，决定下一步的最佳路径。
+            
+            # 用户需求或者对话历史:
+            {messages}
             # 当前状态摘要:
             - 是否已获得分析工具的结果: {has_tool_results}
 
@@ -75,7 +73,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", agent_prompt),
-            MessagesPlaceholder(variable_name="messages"),
+            ("human", f"请根据上述指示生成路径。"),
         ]
     )
     
@@ -90,7 +88,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     logging.info("正在调用LLM进行路由决策...")
     try:
         decision_dict = runnable.invoke({
-            "messages": state["messages"],
+            "messages": state["messages"][-1],
             "has_tool_results": has_tool_results
         })
         # 用Pydantic模型解析和验证这个字典
@@ -203,18 +201,27 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         filename = None
         target = None
         treatment = None
-
+    
+    loaded_filename = None
+    
+    logging.info(f"filename: {filename}, state.get('fold_name'): {state.get('fold_name')}")
     try:
-        if filename:
+        if filename :
             file_content_bytes = get_file_content(user_id, filename)
+            state['fold_name'] = filename
             # 注意这里的文件名后续并没有用到
             loaded_filename = filename
+        elif state.get('fold_name'):
+            loaded_filename = state.get('fold_name')
+            file_content_bytes = get_file_content(user_id, loaded_filename)
+
         else:
-            file_content_bytes, loaded_filename = get_recent_file(user_id)
+            file_content_bytes , loaded_filename = get_recent_file(user_id)
 
-        if not file_content_bytes:
+        if not file_content_bytes or not loaded_filename:
             raise FileNotFoundError("找不到任何可供分析的文件。请先上传一个CSV文件。")
-
+        
+        state['fold_name'] = loaded_filename
         file_content_str = file_content_bytes.decode('utf-8')
         df = pd.read_csv(io.StringIO(file_content_str))
         data_summary = get_data_summary(df)
@@ -241,7 +248,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     )
 
     # 5. 根据验证结果决策
-    if is_ready == 0:
+    if is_ready == 0 or is_ready == 1:
         logging.info("验证通过，进入预处理节点。")
         ## 这里是完全替换还是补充呢
         recommend_message = AIMessage(content = "决策：信息完备，进入预处理节点。", name="fold")
@@ -379,7 +386,7 @@ class RagQuestion(BaseModel):
 
 def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: ChatOpenAI, loop: asyncio.AbstractEventLoop) -> dict:
     """
-    执行工具模块 (重构版)。
+    执行工具模块。
     1.  **并行执行**: 同时启动因果分析 (通过MCP) 和知识库查询 (RAG)。
     2.  **准备输入**: 
         -   对于因果分析，从状态中获取文件内容的原始字符串。
@@ -684,14 +691,32 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     state["final_report"] = response
     return {"final_report": state["final_report"]}
 
-def normal_chat_node(state: CausalChatState) -> dict:
+def normal_chat_node(state: CausalChatState,llm: ChatOpenAI) -> dict:
     """
     Represents "正常问答".
     This is for when the agent determines it's a simple chat conversation.
     """
     logging.info("--- 步骤: 普通问答节点 ---")
-    last_message = state["messages"][-1].content
-    return {"final_report": f"回复: {last_message}"}
+    
+    prompt_template = (
+        """
+        system role: 你是日常聊天助手，你的任务是根据用户的对话历史，回答用户的问题。
+        
+        """
+    )
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", prompt_template),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    runnable = prompt | llm | StrOutputParser()
+    response = runnable.invoke({
+        "messages": state["messages"],
+    })
+    state["messages"].append(AIMessage(content=response, name="normal_chat"))
+    return state
 
 
 def ask_human_node(state: CausalChatState) -> dict:

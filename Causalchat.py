@@ -676,11 +676,13 @@ async def ai_call(text, user_id, username, session_id):
         # 恢复图的执行
         logging.info("正在恢复图的执行...")
         try:
-            final_state = None
+            final_state_data = None
             async for event in agent_graph.astream(interrupted_state):
-                final_state = event
-            
-            final_state_data = list(final_state.values())[0]
+                if isinstance(event, dict) and event:
+                    event_value = list(event.values())[0]
+                    # 检查节点的输出是否为我们需要的状态字典
+                    if isinstance(event_value, dict) and "messages" in event_value:
+                        final_state_data = event_value
             
             # 检查恢复后是否又需要暂停
             # 为ture
@@ -718,6 +720,7 @@ async def ai_call(text, user_id, username, session_id):
         user_id=user_id,
         username=username,
         session_id=session_id,
+        fold_name=None,
         
         tool_call_request=None,
         analysis_parameters=None,
@@ -733,13 +736,9 @@ async def ai_call(text, user_id, username, session_id):
     # 4. 异步调用我们编译好的 LangGraph agent
     logging.info(f"正在为用户 {username} 调用 LangGraph Agent...")
     try:
-        final_state = None
-        async for event in agent_graph.astream(initial_state):
-            final_state = event
-        
-        final_state_data = list(final_state.values())[0]
+        # 使用 ainvoke 直接获取最终状态，而不是 astream
+        final_state_data = await agent_graph.ainvoke(initial_state)
 
-        logging.info(f"完整的 Graph 最终状态: {final_state_data}")
 
         # 5. 根据最终状态格式化响应
         # 检查图是否需要暂停以等待用户输入
@@ -773,7 +772,19 @@ def process_final_result(final_state_data):
             }
 
     # 默认返回最终报告或普通聊天内容
-    final_output_summary = final_state_data.get("final_report", "抱歉，我在处理时遇到了问题。")
+    final_output_summary = final_state_data.get("final_report")
+    if final_output_summary:
+        logging.info("Graph 正常结束，返回最终报告。")
+        # 确保ai_response的summary字段有值
+        return {"type": "text", "summary": final_output_summary}
+
+    # 如果没有final_report，则从最后一条消息中获取内容
+    last_message = final_state_data.get("messages", [])[-1]
+    if isinstance(last_message, AIMessage):
+        final_output_summary = last_message.content
+    else:
+        final_output_summary = "抱歉，我在处理时遇到了问题。"
+
     logging.info("Graph 正常结束，返回纯文本总结。")
     return {"type": "text", "summary": final_output_summary}
 
@@ -826,9 +837,12 @@ def save_chat(user_id, session_id, user_msg, ai_response):
             attachment_type = 'other'
 
             if isinstance(ai_response, dict):
-                # 请尝试从 ai_response 字典里获取 'summary' 的内容。如果成功获取到了，就把它赋值给 ai_content。
-                # 如果没找到 'summary' 这个键，那就把整个 ai_response 字典转换成一个JSON字符串
-                ai_content = ai_response.get('summary', json.dumps(ai_response, ensure_ascii=False))
+                # 确保 summary 键存在且不为 None
+                ai_content = ai_response.get('summary')
+                if ai_content is None:
+                    # 如果 summary 为空，将整个响应序列化为字符串作为备用
+                    ai_content = json.dumps(ai_response, ensure_ascii=False)
+                
                 if ai_response.get('type') == 'causal_graph' and 'data' in ai_response:
                     has_attachment = True
                     attachment_type = 'causal_graph'

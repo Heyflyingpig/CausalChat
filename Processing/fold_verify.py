@@ -1,4 +1,4 @@
-def validate_analysis(analysis_params: dict, target: str = None, treatment: str = None) -> tuple[bool, list[str],list[str]]:
+def validate_analysis(analysis_params: dict, target: str = None, treatment: str = None) -> tuple[int, list[str],list[str]]:
     """
     基于增强的数据摘要进行因果分析就绪性验证。
     
@@ -17,24 +17,24 @@ def validate_analysis(analysis_params: dict, target: str = None, treatment: str 
     column_profiles = analysis_params.get("column_profiles", {})
     quality_assessment = analysis_params.get("quality_assessment", {})
     
-    # --- 1. 关键参数验证 (遇到则立即返回) ---
+    # 缺少目标变量和处理变量不需要报错
     if not target or not treatment:
-        issues.append("缺少目标变量(target)或处理变量(treatment)的指定")
-        return (False, issues, recommends)
+        recommends.append("缺少目标变量(target)或处理变量(treatment)的指定")
+        return (1, issues, recommends)
 
     parameter_errors = []
-    if target not in columns:
+    if target != None and target not in columns:
         parameter_errors.append(f"目标变量 '{target}' 不存在于数据列中")
-    if treatment not in columns:
+    if treatment != None and treatment not in columns:
         parameter_errors.append(f"处理变量 '{treatment}' 不存在于数据列中")
-    if target == treatment:
+    if target != None and treatment != None and target == treatment:
         parameter_errors.append("目标变量与处理变量不能相同")
     
     if parameter_errors:
         issues.extend(parameter_errors)
-        return (False, issues, recommends) # 参数名错误，立即返回
+        return (2, issues, recommends) # 参数名错误，立即返回
 
-    # --- 2. 指定变量的数据质量检查 ---
+    # 2. 指定变量的数据质量检查 
     for var_name, var_type in [("目标变量", target), ("处理变量", treatment)]:
         if var_type in column_profiles:
             profile = column_profiles[var_type]
@@ -56,14 +56,14 @@ def validate_analysis(analysis_params: dict, target: str = None, treatment: str 
             if profile.get('is_constant', False):
                 issues.append(f"{var_name} '{var_type}' 为常数列或唯一值过少，无法进行有效分析")
 
-    # --- 3. 整体数据质量与规模检查 ---
+    # 整体数据质量与规模检查 
     n_rows = analysis_params.get('n_rows', 0)
     if n_rows < 50:
-        issues.append(f"样本量过小(n={n_rows})，建议至少有50个观测值以确保分析的稳健性")
+        recommends.append(f"样本量过小(n={n_rows})，建议至少有50个观测值以确保分析的稳健性")
     
     total_missing_ratio = quality_assessment.get('total_missing_ratio', 0)
     if total_missing_ratio > 0.2:
-        issues.append(f"整体缺失率过高({total_missing_ratio:.1%})，建议先进行数据清洗")
+        recommends.append(f"整体缺失率过高({total_missing_ratio:.1%})，建议先进行数据清洗")
     
     constant_columns = quality_assessment.get('constant_columns', [])
     # 排除已经是target或treatment的常数列，避免重复报错
@@ -71,7 +71,7 @@ def validate_analysis(analysis_params: dict, target: str = None, treatment: str 
     if len(other_constant_columns) > 0:
         recommends.append(f"存在常数列: {', '.join(other_constant_columns[:3])}{'等' if len(other_constant_columns) > 3 else ''}将不会进入因果分析")
 
-    # --- 4. 生成建议 (非阻断性问题) ---
+    # --- 4. 生成建议 (非阻断性问题)
     datetime_columns = [col for col, profile in column_profiles.items() 
                        if profile.get('inferred_type') == 'datetime']
     if datetime_columns and len(datetime_columns) > 0:

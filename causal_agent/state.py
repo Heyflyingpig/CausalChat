@@ -37,6 +37,7 @@ class CausalChatState(TypedDict):
     username: str
     user_id: int
     session_id: str
+    fold_name:str
 
     tool_call_request: Optional[bool]
     
