@@ -324,3 +324,11 @@ python Run_causal.py
 2025.10.23
   - 【bug修复】：修复agent中的用户暂停逻辑
   - 【bug修复】：修复agent当中的文件上传逻辑
+  
+--- 
+2025.10.26
+  - 【内容新增】：增加langgraph中的checkpoint支持,重构langgraph的节点逻辑
+  - 【内容新增】：实现mysql数据库的langgraph checkpoint功能，实现同步/异步方法
+  - 【内容新增】：增加inquiry_answer节点，实现对用户追问的回答
+  - 【bug修复】： 修复目前节点的reducer机制，修复state中的reducer机制，实现消息记录的补充说明
+  - 【bug修复】： 主程序对checkpoint的响应逻辑补充，补充config配置，修复对多次回答的逻辑缺失
