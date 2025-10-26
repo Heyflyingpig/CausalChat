@@ -19,6 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from config.settings import settings
 
 ## 导入人设
+## 因果分析人设
+from causal_agent.back_prompt import causal_prompt
+## 数据分析人设
 from causal_agent.back_prompt import data_prompt
 ## 知识库查询人设
 from causal_agent.back_prompt import causal_rag_prompt
@@ -31,7 +34,7 @@ from tool_node.excute_output import excute_output
 
 class RouteQuery(BaseModel):
     """定义Agent决策的选项。"""
-    route: Literal["postprocess", "fold", "normal_chat"] = Field(
+    route: Literal["postprocess", "fold", "normal_chat","inquiry_answer"] = Field(
         ...,
         description="根据用户的对话历史和意图，选择下一步应该走的路径。"
     )
@@ -55,12 +58,14 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             {messages}
             # 当前状态摘要:
             - 是否已获得分析工具的结果: {has_tool_results}
+            - 是否已获取到了最终的报告：{final_report}
 
             # 你的决策选项:
             1. `postprocess`: 如果已经获得了因果分析结果 ({has_tool_results} is True)，可以选择此路径以进入后处理模块。
             2. `fold`: 如果用户想要进行因果分析 (例如，对话中提到“分析”、“处理数据”或与“因果推断”相关的用语)，但我们还没有分析结果 ({has_tool_results} is False)，选择此路径以启动文件加载模块。
             3. `normal_chat`: 如果用户的提问只是一个与因果领域不相关的消息，不需要调用任何复杂的因果分析工具，选择此路径。
-
+            4. `inquiry_answer`: 如果已经获取到了最终的报告（{final_report} is not None），选择此路径以直接根据报告回答用户的问题。
+            
             请根据下面的对话历史，做出你的选择。
             你必须按照RouteQuery返回一个只包含 "route" 键的 JSON 对象格式来返回你的决策。
             **绝对不要**在你的回复中包含任何Markdown格式（例如 ```json ... ```）。
@@ -73,7 +78,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", agent_prompt),
-            ("human", f"请根据上述指示生成路径。"),
+            ("human", "请根据上述指示生成路径。"),
         ]
     )
     
@@ -87,10 +92,13 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     
     logging.info("正在调用LLM进行路由决策...")
     try:
-        decision_dict = runnable.invoke({
-            "messages": state["messages"][-1],
-            "has_tool_results": has_tool_results
-        })
+        decision_dict = runnable.invoke(
+            {
+                "messages": state["messages"][-1],
+                "has_tool_results": has_tool_results,
+                "final_report": state.get("final_report", None)
+            }
+        )
         # 用Pydantic模型解析和验证这个字典
         structured_response = RouteQuery.model_validate(decision_dict)
         route_decision = structured_response.route
@@ -98,6 +106,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     except Exception as e:
         # 这里的异常可能来自JSON解析，也可能来自Pydantic验证
         logging.warning(f"无法从LLM响应中解析或验证路由决策: {e}。将回退到 normal_chat。")
+        route_decision = "normal_chat"  # 设置默认值
 
     logging.info(f"LLM决策结果: {route_decision}")
 
@@ -106,11 +115,13 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         response_message = AIMessage(content="决策：信息完备，进入后处理模块。", name="agent")
     elif route_decision == 'fold':
         response_message = AIMessage(content="决策：信息不全，启动文件加载模块。", name="agent")
+    elif route_decision == 'inquiry_answer':
+        response_message = AIMessage(content="决策：报告已获取，进入根据报告追问模块。", name="agent")
     else: # 'normal_chat'
         response_message = AIMessage(content="决策：普通问答。", name="agent")
 
-    state["messages"].append(response_message)
-    return {"messages": state["messages"]}
+    # 只返回新消息，不修改 state["messages"]
+    return {"messages": [response_message]}
 
 class foldQuery(BaseModel):
     """从用户对话中提取文件名及因果分析所需的关键参数。"""
@@ -232,12 +243,13 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         state["ask_human"] = error_msg
         
         recommend_message = AIMessage(content=f"决策：文件加载或解析阶段发生错误: {e}", name="fold")
-        state["messages"].append(recommend_message)
-        return state
+        # 只返回新消息
+        return {"messages": [recommend_message], "ask_human": state["ask_human"]}
 
-    ## 也许会造成上下文超格
+    ## 优化：只保存 file_content 和摘要，不保存 DataFrame
+    # 原因：DataFrame 序列化体积大，file_content 可随时重新生成 DataFrame
     state['file_content'] = file_content_str
-    state['dataframe'] = df
+    # state['dataframe'] = df  # 避免序列化开销
     state['analysis_parameters'] = data_summary
     
     # 4. 运行确定性验证
@@ -250,18 +262,19 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     # 5. 根据验证结果决策
     if is_ready == 0 or is_ready == 1:
         logging.info("验证通过，进入预处理节点。")
-        ## 这里是完全替换还是补充呢
-        recommend_message = AIMessage(content = "决策：信息完备，进入预处理节点。", name="fold")
-        state["messages"].append(recommend_message)
         state['analysis_parameters'].update({"target": target, "treatment": treatment})
 
+        # 收集需要返回的新消息
+        new_messages = []
+        recommend_message = AIMessage(content = "决策：信息完备，进入预处理节点。", name="fold")
+        new_messages.append(recommend_message)
 
         # 针对建议，生成提示
         if recommends:
-            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {recommends}", )
-            state["messages"].append(recommend_message)
+            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {recommends}")
+            new_messages.append(recommend_message)
         
-        return state
+        return {"messages": new_messages, "analysis_parameters": state['analysis_parameters'], "fold_name": state['fold_name'], "file_content": state['file_content']}
     
     else:
         logging.warning(f"验证失败，需要人工干预。原因: {', '.join(issues)}")
@@ -285,8 +298,8 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         )
         state["ask_human"] = question
         recommend_message = AIMessage(content=f"决策：信息不全，需要人工干预。{question}", name="fold")
-        state["messages"].append(recommend_message)
-        return state
+        # 只返回新消息
+        return {"messages": [recommend_message], "ask_human": state["ask_human"], "fold_name": state['fold_name'], "file_content": state['file_content'], "analysis_parameters": state['analysis_parameters']}
 
 
 def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
@@ -300,16 +313,21 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
     logging.info("--- 步骤: 数据预处理与分析节点 ---")
 
-    df = state.get("dataframe")
+    # 从 file_content 动态生成 DataFrame
+    file_content = state.get("file_content")
     analysis_parameters = state.get("analysis_parameters", {})
 
-    if df is None or not analysis_parameters:
+    if file_content is None or not analysis_parameters:
         error_msg = "无法执行预处理，因为数据或其摘要信息在状态中丢失。"
         logging.error(error_msg)
         state["ask_human"] = error_msg
         recommend_message = AIMessage(content=f"决策：无法执行预处理，因为数据或其摘要信息在状态中丢失。", name="preprocess")
-        state["messages"].append(recommend_message)
-        return state
+        # 只返回新消息
+        return {"messages": [recommend_message], "ask_human": state["ask_human"]}
+
+    # 动态生成 DataFrame（从 file_content）
+    df = pd.read_csv(io.StringIO(file_content))
+    logging.info(f"从 file_content 重新生成 DataFrame，shape: {df.shape}")
 
     # 生成可视化图表 
     visualizations = {}
@@ -320,12 +338,8 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     
     except Exception as e:
         logging.error(f"生成数据可视化时发生未知错误: {e}", exc_info=True)
-        # 准备一条消息，通知用户未知错误
-        error_message = AIMessage(
-            content=f"生成数据可视化图表时遇到一个未知错误: {e}",
-            name="preprocess"
-        )
-        state["messages"].append(error_message)
+        # 可视化失败不阻断流程，记录日志即可
+        # 不需要添加消息到state，继续执行后续步骤
     
     # 3. 调用LLM进行自然语言总结
     prompt = ChatPromptTemplate.from_messages(
@@ -363,16 +377,20 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     })
     logging.info(f"LLM数据总结结果: {preprocess_summary}")
 
-    # 4. 更新状态
+    # 4. 更新状态并返回新消息
     state["preprocess_summary"] = preprocess_summary
     
     summary_message = AIMessage(
         content= "决策：数据预处理完成，进入工具处理路由",
         name="preprocess"
     )
-    state["messages"].append(summary_message)
 
-    return state
+    # 只返回新消息和需要更新的状态
+    return {
+        "messages": [summary_message],
+        "preprocess_summary": state["preprocess_summary"],
+        "visualizations": state.get("visualizations", {})
+    }
 
 
 
@@ -503,8 +521,13 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             content="信息完备：工具执行完成，获得了因果分析和知识库查询结果。", 
             name="execute_tools"
         )
-        state["messages"].append(response_message)
-        state["tool_call_request"] = True
+        # 只返回新消息和需要更新的状态
+        return {
+            "messages": [response_message],
+            "causal_analysis_result": state["causal_analysis_result"],
+            "knowledge_base_result": state["knowledge_base_result"],
+            "tool_call_request": True
+        }
     
     else:
         error_message = causal_analysis_result.get("message", "未知工具错误")
@@ -513,10 +536,13 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
             content=f"决策：工具执行失败：{error_message}",
             name="execute_tools"
         )
-        state["messages"].append(response_message)
-        state["tool_call_request"] = False
-
-    return state
+        # 只返回新消息和需要更新的状态
+        return {
+            "messages": [response_message],
+            "causal_analysis_result": state["causal_analysis_result"],
+            "knowledge_base_result": state["knowledge_base_result"],
+            "tool_call_request": False
+        }
 
 
 
@@ -553,9 +579,11 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         if adjacency_matrix.size == 0:
             error_msg = "无法从分析结果中提取有效的因果图数据。"
             logging.error(error_msg)
-            state["messages"].append(AIMessage(content=f"决策：{error_msg}", name="postprocess"))
-            state["postprocess_result"] = {"error": error_msg}
-            return state
+            # 只返回新消息和错误状态
+            return {
+                "messages": [AIMessage(content=f"决策：{error_msg}", name="postprocess")],
+                "postprocess_result": {"error": error_msg}
+            }
         
         logging.info(f"提取到 {len(node_names)} 个节点的因果图")
         
@@ -609,35 +637,40 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         state["postprocess_result"] = postprocess_result
         
         
+        # 收集需要返回的新消息
+        new_messages = []
+        
         # 如果有环路被修正，添加额外说明
         if has_cycle:
             explanation = f"\n\n**注意**：原始图中检测到 {len(cycles)} 个环路，部分已通过LLM辅助决策进行修正。理由如下：{edge_evaluations.get('reason', '')}"      
-            response_message = AIMessage(
-                content=explanation,
-                name="postprocess"
-            )
-            state["messages"].append(response_message)
+            new_messages.append(AIMessage(content=explanation, name="postprocess"))
         
-        response_message = AIMessage(
+        new_messages.append(AIMessage(
             content="决策：后处理完成，准备进入报告生成阶段",
             name="postprocess"
-        )
-        state["messages"].append(response_message)
+        ))
 
         logging.info("后处理完成，准备进入报告生成阶段")
         
-        return state
+        # 只返回新消息和后处理结果
+        return {
+            "messages": new_messages,
+            "postprocess_result": state["postprocess_result"]
+        }
         
     except Exception as e:
-        state["postprocess_result"] = {"error": str(e) + f"\n\n将使用原始分析结果继续生成报告。"}
+        postprocess_result = {"error": str(e) + f"\n\n将使用原始分析结果继续生成报告。"}
         # 异常处理：记录错误但不中断流程
         error_message = AIMessage(
             content=f"后处理遇到问题: {str(e)}\n\n将使用原始分析结果继续生成报告。",
             name="postprocess"
         )
-        state["messages"].append(error_message)
         
-        return state
+        # 只返回新消息和错误状态
+        return {
+            "messages": [error_message],
+            "postprocess_result": postprocess_result
+        }
 
 
 def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
@@ -687,19 +720,16 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     })
 
     logging.info(f"LLM报告结果: {response}")
-    
-    state["final_report"] = response
-    
 
     report_complete_message = AIMessage(
         content="决策：因果分析报告已生成完成。",
         name="report"
     )
-    state["messages"].append(report_complete_message)
     
+    # 只返回新消息和最终报告
     return {
-        "final_report": state["final_report"],
-        "messages": state["messages"]
+        "final_report": response,
+        "messages": [report_complete_message]
     }
 
 def normal_chat_node(state: CausalChatState,llm: ChatOpenAI) -> dict:
@@ -726,9 +756,45 @@ def normal_chat_node(state: CausalChatState,llm: ChatOpenAI) -> dict:
     response = runnable.invoke({
         "messages": state["messages"],
     })
-    state["messages"].append(AIMessage(content=response, name="normal_chat"))
-    return state
+    # 只返回新消息
+    return {"messages": [AIMessage(content=response, name="normal_chat")]}
 
+def inquiry_answer_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
+    """
+    根据报告追问用户的问题
+    """
+    logging.info("--- 步骤: 根据报告回答用户的问题节点 ---")
+    prompt_template = (
+        """
+        system role: {system_role}
+        # 当前状态摘要
+        1. 因果分析结果：{causal_analysis_result}
+        2. 知识库结果：{knowledge_base_result}
+        3. 后处理结果：{postprocess_result}
+        4. 报告：{final_report}
+        
+        # 你的任务：根据历史摘要和所有分析结果，回答用户问题
+        - 用户的问题：{messages}
+        
+        """
+    )
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", prompt_template),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    runnable = prompt | llm | StrOutputParser()
+    response = runnable.invoke({
+        "messages": state["messages"],
+        "causal_analysis_result": state.get("causal_analysis_result", {}),
+        "knowledge_base_result": state.get("knowledge_base_result", {}),
+        "postprocess_result": state.get("postprocess_result", {}),
+        "final_report": state.get("final_report", {}),
+        "system_role": causal_prompt()
+    })
+    # 只返回新消息
+    return {"messages": [AIMessage(content=response, name="inquiry_answer")]}
 
 def ask_human_node(state: CausalChatState) -> dict:
     """

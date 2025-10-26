@@ -3,6 +3,11 @@ from langgraph.graph import StateGraph, END
 from .state import CausalChatState
 from . import nodes, edges
 import asyncio
+import logging
+
+# === 导入 Checkpoint 相关 ===
+from Database.mysql_checkpointer import MySQLSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession", loop: "asyncio.AbstractEventLoop"):
     """
@@ -17,6 +22,7 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession", loop: "asyncio
     preprocess_node_with_llm = partial(nodes.preprocess_node, llm=llm)
     execute_tools_node_with_session = partial(nodes.execute_tools_node, mcp_session=mcp_session,llm=llm, loop=loop)
     postprocess_node_with_llm = partial(nodes.postprocess_node, llm=llm)
+    inquiry_answer_node_with_llm = partial(nodes.inquiry_answer_node, llm=llm)
     report_node_with_llm = partial(nodes.report_node, llm=llm)
 
     # Add all the nodes to the graph
@@ -27,8 +33,8 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession", loop: "asyncio
     workflow.add_node("postprocess", postprocess_node_with_llm)
     workflow.add_node("report", report_node_with_llm)
     workflow.add_node("normal_chat", nodes.normal_chat_node)
+    workflow.add_node("inquiry_answer", inquiry_answer_node_with_llm)
     workflow.add_node("ask_human", nodes.ask_human_node)
-
     # Set the entry point of the graph
     workflow.set_entry_point("agent")
 
@@ -39,7 +45,8 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession", loop: "asyncio
         {
             "fold": "fold",
             "normal_chat": "normal_chat",
-            "postprocess": "postprocess"
+            "postprocess": "postprocess",
+            "inquiry_answer": "inquiry_answer"
         }
     )
     workflow.add_conditional_edges(
@@ -86,9 +93,41 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession", loop: "asyncio
     workflow.add_edge("normal_chat", END)
     
 
+    checkpointer = None
+    try:
+        # 从配置文件加载数据库连接信息
+        from config.settings import settings
+        
+        connection_config = {
+            'host': settings.MYSQL_HOST,
+            'port': 3306,  # MySQL 默认端口
+            'user': settings.MYSQL_USER,
+            'password': settings.MYSQL_PASSWORD,
+            'database': settings.MYSQL_DATABASE
+        }
+        
+        # 创建 MySQLSaver 实例
+        # serde 使用 JsonPlusSerializer(pickle_fallback=True) 处理 DataFrame 等复杂对象
+        # 虽然现在没有
+        checkpointer = MySQLSaver(
+            connection_config=connection_config,
+            serde=JsonPlusSerializer(pickle_fallback=True)
+        )
+        
+        
+        logging.info("MySQL Checkpointer 已启用")
+        
+    except Exception as e:
+        logging.warning(f" Checkpointer 初始化失败，将不启用持久化: {e}")
+        checkpointer = None
+
     # Compile the graph into a runnable application
     # 通过设置 `interrupt_before`, 我们告诉图在执行 `ask_human` 节点之前暂停。
-    app = workflow.compile(interrupt_before=["ask_human"])
+    # 通过传入 `checkpointer`，启用持久化功能（对话记忆、状态恢复、容错）
+    app = workflow.compile(
+        checkpointer=checkpointer,  # ← 关键：传入 checkpointer
+        interrupt_before=["ask_human"]
+    )
     
     return app
 

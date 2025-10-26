@@ -1,5 +1,6 @@
-from typing import TypedDict, List, Optional, Any
+from typing import TypedDict, List, Optional, Any, Annotated
 from langchain_core.messages import BaseMessage
+from operator import add
 
 class CausalChatState(TypedDict):
     """
@@ -33,7 +34,9 @@ class CausalChatState(TypedDict):
         final_report: Optional[str]
         ask_human: Optional[str] # If not None, this is the question to ask the user, and the graph should pause.
     """
-    messages: List[BaseMessage]
+    # === 关键修改：为 messages 添加 reducer ===
+    messages: Annotated[List[BaseMessage], add]
+    
     username: str
     user_id: int
     session_id: str
@@ -44,7 +47,7 @@ class CausalChatState(TypedDict):
     ## 从Pandas DataFrame中提取一个结构化的摘要，包含因果推断所需的详细统计信息。
     analysis_parameters: Optional[dict]
     file_content: Optional[str]
-    dataframe: Optional[Any]
+    ## dataframe: Optional[Any]
     
     causal_analysis_result: Optional[dict]
     knowledge_base_result: Optional[str]

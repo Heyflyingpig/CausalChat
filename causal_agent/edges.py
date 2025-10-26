@@ -16,6 +16,9 @@ def decision_router(state: CausalChatState) -> str:
     elif "信息不全" in agent_decision:
         logging.info("路由决策 -> 前往[文件加载]")
         return "fold"
+    elif "报告" in agent_decision:
+        logging.info("路由决策 -> 前往[追问模块]")
+        return "inquiry_answer"
     else: # "普通问答" or any other default
         logging.info("路由决策 -> 前往[普通问答]")
         return "normal_chat"

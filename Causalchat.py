@@ -676,8 +676,16 @@ async def ai_call(text, user_id, username, session_id):
         # 恢复图的执行
         logging.info("正在恢复图的执行...")
         try:
+            # 恢复时也需要传入 config（相同的 thread_id）
+            config = {
+                "configurable": {
+                    "thread_id": session_id,
+                    "user_id": user_id
+                }
+            }
+            
             final_state_data = None
-            async for event in agent_graph.astream(interrupted_state):
+            async for event in agent_graph.astream(interrupted_state, config):
                 if isinstance(event, dict) and event:
                     event_value = list(event.values())[0]
                     # 检查节点的输出是否为我们需要的状态字典
@@ -705,39 +713,47 @@ async def ai_call(text, user_id, username, session_id):
     # 1. 获取历史消息
     history_messages_raw = get_chat_history(session_id, user_id, limit=20)
     
-    # 2. 将历史消息转换为 LangChain 格式
-    chat_history = [
-        HumanMessage(content=msg["content"]) if msg["role"] == "user" 
-        else AIMessage(content=msg["content"]) 
-        for msg in history_messages_raw
-    ]
-    # 添加当前用户输入
-    chat_history.append(HumanMessage(content=text))
-
-    # 3. 构建 LangGraph 的初始状态
-    initial_state = CausalChatState(
-        messages=chat_history,
-        user_id=user_id,
-        username=username,
-        session_id=session_id,
-        fold_name=None,
+    
+    # 配置（两种情况都需要）
+    config = {
+        "configurable": {
+            "thread_id": session_id,
+            "user_id": user_id
+        }
+    }
+    
+    if not history_messages_raw:
+        # === 场景1：第一次对话，构建完整的初始状态 ===
+        logging.info("第一次对话，创建新的初始状态")
         
-        tool_call_request=None,
-        analysis_parameters=None,
+        chat_history = [HumanMessage(content=text)]
         
-        causal_analysis_result=None,
-        knowledge_base_result=None,
-        postprocess_result=None,
-        
-        final_report=None,
-        ask_human=None,
-    )
+        initial_state = {
+            "messages": chat_history,
+            "user_id": user_id,
+            "username": username,
+            "session_id": session_id
+        }
+    else:
+        logging.info(f"后续对话，尝试从 checkpoint 恢复")
+    
+        initial_state = {
+            "messages": [HumanMessage(content=text)]
+        }
 
     # 4. 异步调用我们编译好的 LangGraph agent
     logging.info(f"正在为用户 {username} 调用 LangGraph Agent...")
     try:
-        # 使用 ainvoke 直接获取最终状态，而不是 astream
-        final_state_data = await agent_graph.ainvoke(initial_state)
+
+        config = {
+            "configurable": {
+                "thread_id": session_id,  # 使用 session_id 作为 thread 标识
+                "user_id": user_id        # 额外信息，用于日志和调试
+            }
+        }
+        
+        # 使用 ainvoke 直接获取最终状态，传入 config
+        final_state_data = await agent_graph.ainvoke(initial_state, config)
 
 
         # 5. 根据最终状态格式化响应
@@ -759,34 +775,63 @@ async def ai_call(text, user_id, username, session_id):
         return {"type": "text", "summary": f"处理请求时出现错误: {e}"}
 
 def process_final_result(final_state_data):
-    """处理图正常完成后的最终结果"""
-    # 检查是否生成了因果图
-    if final_state_data.get("causal_analysis_result") and final_state_data.get("final_report"):
-        analysis_data = final_state_data["causal_analysis_result"]
-        if analysis_data.get("success"):
-            logging.info("在最终状态中找到因果分析结果，返回结构化响应。")
-            return {
-                "type": "causal_graph",
-                "summary": final_state_data["final_report"],
-                "data": analysis_data.get("data")
-            }
-
-    # 默认返回最终报告或普通聊天内容
-    final_output_summary = final_state_data.get("final_report")
-    if final_output_summary:
-        logging.info("Graph 正常结束，返回最终报告。")
-        # 确保ai_response的summary字段有值
-        return {"type": "text", "summary": final_output_summary}
-
-    # 如果没有final_report，则从最后一条消息中获取内容
-    last_message = final_state_data.get("messages", [])[-1]
-    if isinstance(last_message, AIMessage):
-        final_output_summary = last_message.content
-    else:
-        final_output_summary = "抱歉，我在处理时遇到了问题。"
-
-    logging.info("Graph 正常结束，返回纯文本总结。")
-    return {"type": "text", "summary": final_output_summary}
+    """
+    处理图正常完成后的最终结果
+    
+    优先级策略：
+    1. 优先返回最新的 AI 消息（messages[-1]）
+    2. 如果最新消息是决策消息，则检查是否有 final_report
+    3. 如果有因果图数据，返回结构化响应
+    """
+    
+    # === 优先级 1：检查最后一条消息 ===
+    messages = final_state_data.get("messages", [])
+    if messages:
+        last_message = messages[-1]
+        
+        # 如果最后一条是 AI 消息
+        if isinstance(last_message, AIMessage):
+            message_name = getattr(last_message, 'name', None)
+            
+            # 检查是否是有实际内容的回复节点
+            # （不是决策消息，而是真正的回复）
+            if message_name in ['normal_chat', 'inquiry_answer']:
+                logging.info(f"返回 {message_name} 节点的回复")
+                return {
+                    "type": "text",
+                    "summary": last_message.content
+                }
+            
+            # 如果是 report 节点生成的决策消息
+            # 检查是否同时有 final_report
+            if message_name == 'report' and final_state_data.get("final_report"):
+                logging.info("返回完整的因果分析报告")
+                
+                # 检查是否有因果图数据（结构化返回）
+                if final_state_data.get("causal_analysis_result"):
+                    analysis_data = final_state_data["causal_analysis_result"]
+                    if analysis_data.get("success"):
+                        return {
+                            "type": "causal_graph",
+                            "summary": final_state_data["final_report"],
+                            "data": analysis_data.get("data")
+                        }
+                
+                # 只有报告，没有图数据
+                return {
+                    "type": "text",
+                    "summary": final_state_data["final_report"]
+                }
+    
+    # === 优先级 2：降级方案，返回 final_report（如果有）===
+    final_report = final_state_data.get("final_report")
+    if final_report:
+        logging.info("未找到最新消息，降级返回 final_report")
+        return {"type": "text", "summary": final_report}
+    
+    # === 优先级 3：最后的降级方案 ===
+    logging.warning("未找到任何可返回的内容，返回默认消息")
+    return {"type": "text", "summary": "抱歉，我在处理时遇到了问题。"}
 
 
 ## 保存历史文件 ( 添加 user_id 参数和列)
@@ -867,7 +912,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
                 """
                 cursor.execute(sql_attachment, (ai_message_id, attachment_type, attachment_content, timestamp_dt))
 
-            # --- 修改：根据是否为第一条消息，决定是否更新标题 ---
+            # 修改：根据是否为第一条消息，决定是否更新标题
             if is_first_message:
                 # 4a. 更新会话，包括新标题（或确认创建时的标题）
                 new_title = user_msg[:8] # 截取前8个字符作为标题
