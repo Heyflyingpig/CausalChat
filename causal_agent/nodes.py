@@ -6,14 +6,13 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from typing import Literal, Optional, Any, List, Tuple, Dict
 import logging
-import asyncio
 import json
 import io
 import pandas as pd
 import numpy as np
 import networkx as nx
 from mcp import ClientSession
-from concurrent.futures import ThreadPoolExecutor
+from langgraph.func import task
 
 ## 基本配置
 from config.settings import settings
@@ -393,26 +392,16 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     }
 
 
-
-class RagQuestion(BaseModel):
-    """用于生成知识库查询问题的模型。"""
-    questions: List[str] = Field(
-        default_factory=list,
-        description="根据对话历史和数据摘要，为知识库生成一个或多个精确、具体的问题列表。"
-    )
+from tool_node.causal_analysis_task import causal_analysis_task
+from tool_node.rag_query_task import rag_query_task
+from tool_node.rag_questions import get_rag_questions
 
 
-def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: ChatOpenAI, loop: asyncio.AbstractEventLoop) -> dict:
+def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: ChatOpenAI) -> dict:
     """
     执行工具模块。
-    1.  **并行执行**: 同时启动因果分析 (通过MCP) 和知识库查询 (RAG)。
-    2.  **准备输入**: 
-        -   对于因果分析，从状态中获取文件内容的原始字符串。
-        -   对于知识库，首先调用LLM根据对话历史和数据摘要动态生成一个查询问题。
-    3.  **调用工具**:
-        -   使用 `run_coroutine_threadsafe` 在主事件循环上异步调用 MCP 的 `perform_causal_analysis` 工具。
-        -   在一个新的守护线程中同步调用 RAG 的 `get_rag_response` 函数。
-    4.  **结果处理**: 等待两个任务完成，收集结果，处理可能的异常，并更新状态。
+    输入：mcp模块
+    输出：因果分析结果和知识库查询结果
     """
     
     logging.info("--- 步骤: 执行工具节点 ---")
@@ -420,103 +409,25 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     ## 获取编码的文件信息
     file_content = state.get("file_content")
 
-    ## 获取分析参数
-    analysis_parameters = state.get("analysis_parameters", {})
-
-    # 定义 MCP 异步任务 
-    async def run_mcp_task_async():
-        logging.info("正在启动 MCP 工具 'perform_causal_analysis'...")
-        try:
-            tool_call_kwargs = {"csv_data": file_content}
-            tool_response_obj = await mcp_session.call_tool("perform_causal_analysis", tool_call_kwargs)
-            tool_response_text = tool_response_obj.content[0].text
-            return json.loads(tool_response_text)
-        except Exception as e:
-            logging.error(f"调用 MCP 工具时发生严重错误: {e}", exc_info=True)
-            return {"success": False, "message": str(e)}
-
-    # 定义 RAG 同步任务 
-    def run_rag_query_task_sync():
-        logging.info("正在启动 RAG 知识库查询...")
-        try:
-            rag_prompt = ChatPromptTemplate.from_messages([
-                ("system", 
-                 """
-                 system role: {system_role}
-                
-                你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题，提出{num_questions}个问题
-
-                # 数据摘要:
-                {data_summary}
-
-                # 数据预处理总结:
-                {preprocess_summary}
-
-                # 你的任务:
-                综合以上信息，生成一个包含多个个问题的JSON列表，并赋值给 'questions' 字段。这些问题应该简洁、明确，旨在从知识库中检索信息，以帮助用户更好地理解当前分析的背景、方法论或潜在风险。
-
-                **你必须严格按照 `RagQuestion` 的 schema 返回一个 JSON 对象。**
-                **绝对不要在你的回复中包含任何Markdown格式或解释性文字。**
-
-                示例输出:
-                {{
-                    "questions": ["什么是混杂因子，以及如何在因果分析中控制它？", "数据缺失在因果分析中会引入哪些类型的偏倚？", "在处理时间序列数据时，PC算法有哪些局限性？"]
-                }}
-                """),
-                ("human", "请根据上述指示和提供的数据摘要，生成问题列表。，注意请只生成json对象，不要包含任何其他文字。")
-            ])
-            
-            question_generator_runnable = rag_prompt | llm | JsonOutputParser()
-            
-            logging.info("正在调用LLM生成RAG查询问题...")
-            
-            llm_output = question_generator_runnable.invoke({
-                "messages": state["messages"],
-                "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False),
-                "preprocess_summary": state.get("preprocess_summary", ""),
-                "system_role": causal_rag_prompt(),
-                "num_questions": 3 # 暂时硬编码
-            })
-
-            try:
-                response = RagQuestion.model_validate(llm_output)
-
-            except Exception as e:
-                logging.error(f"Could not parse JSON from LLM response: {e}\nRaw response: {llm_output}")
-                return {"success": False, "response": ["无法生成RAG问题"]}
-            
-            logging.info(f"LLM生成的RAG问题列表: {response.questions}")
-            
-            # 生成的回答是一个列表
-            rag_response = get_rag_response(response.questions)
-            logging.info("RAG 知识库查询成功。")
-            return {"success": True, "response": rag_response}
-        except Exception as e:
-            logging.error(f"执行 RAG 查询时发生错误: {e}", exc_info=True)
-            return {"success": False, "response": str(e)}
-
     # 并行执行任务并等待结果 
     logging.info("--- 开始并行执行因果分析和RAG查询 ---")
+
+    rag_question_task = get_rag_questions(state, llm, num_questions=2)
     
-    # 将异步的MCP任务安全地提交到主事件循环
-    mcp_future = asyncio.run_coroutine_threadsafe(run_mcp_task_async(), loop)
+    causal_task = causal_analysis_task(file_content, mcp_session)
+
+    rag_questions = rag_question_task.result()
+
+    rag_task = rag_query_task(rag_questions)    
     
-    # 使用线程池来执行同步的RAG任务
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        rag_future = executor.submit(run_rag_query_task_sync)
-    
-    # 阻塞并等待两个任务的结果
-    causal_analysis_result = mcp_future.result()  
-    knowledge_base_result = rag_future.result()
+    causal_task_result = causal_task.result()
+
+    rag_task_result = rag_task.result()
     
     logging.info("--- 因果分析和RAG查询均已完成 ---")
-
-    # 更新状态 
-    state["causal_analysis_result"] = causal_analysis_result
-    state["knowledge_base_result"] = knowledge_base_result
-
+    
     # 根据主要工具（因果分析）的结果来决定下一步
-    if causal_analysis_result.get("success"):
+    if causal_task_result.get("success"):
         response_message = AIMessage(
             content="信息完备：工具执行完成，获得了因果分析和知识库查询结果。", 
             name="execute_tools"
@@ -524,13 +435,13 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
         # 只返回新消息和需要更新的状态
         return {
             "messages": [response_message],
-            "causal_analysis_result": state["causal_analysis_result"],
-            "knowledge_base_result": state["knowledge_base_result"],
+            "causal_analysis_result": causal_task_result,
+            "knowledge_base_result": rag_task_result,
             "tool_call_request": True
         }
     
     else:
-        error_message = causal_analysis_result.get("message", "未知工具错误")
+        error_message = causal_task_result.get("message", "未知工具错误")
         logging.warning(f"工具执行失败: {error_message}")
         response_message = AIMessage(
             content=f"决策：工具执行失败：{error_message}",
@@ -539,8 +450,8 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
         # 只返回新消息和需要更新的状态
         return {
             "messages": [response_message],
-            "causal_analysis_result": state["causal_analysis_result"],
-            "knowledge_base_result": state["knowledge_base_result"],
+            "causal_analysis_result": causal_task_result,
+            "knowledge_base_result": rag_task_result,
             "tool_call_request": False
         }
 
