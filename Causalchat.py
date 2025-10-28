@@ -151,7 +151,7 @@ def check_database_readiness():
             if not test_result or test_result[0] != 1:
                 raise RuntimeError("数据库连接测试失败")
             
-            logging.info(f"优化后的数据库 '{settings.MYSQL_DATABASE}' 就绪检查通过。所有必需表已存在。")
+            logging.info(f"数据库 '{settings.MYSQL_DATABASE}' 就绪检查通过。所有必需表已存在。")
             return True
             
     except mysql.connector.Error as e:
@@ -186,7 +186,6 @@ except Exception as e:
 
 # 全局状态
 
-# --- 修改：用户认证相关函数 ---
 
 # 查找用户
 def find_user(username):
@@ -642,9 +641,10 @@ class KnowledgeBaseTool(BaseTool):
 
 from causal_agent.graph import create_graph
 from causal_agent.state import CausalChatState
+from langgraph.types import Command  # 用于恢复 interrupt() 暂停的图
 
 
-# 键：session_id，值：暂停的图状态
+
 interrupted_sessions = {}
 
 async def ai_call(text, user_id, username, session_id):
@@ -654,67 +654,7 @@ async def ai_call(text, user_id, username, session_id):
     """
     logging.info(f"处理用户 {username} 的消息，会话ID: {session_id}")
     
-    # --- 新增：检查是否有暂停的会话需要恢复 ---
-    # 一开始是没有的
-    if session_id in interrupted_sessions:
-        logging.info(f"检测到会话 {session_id} 有暂停的图状态，正在恢复执行...")
-        
-        # 获取暂停的状态
-        # 为了区分用户
-        interrupted_state = interrupted_sessions[session_id]
-        
-        # 将用户的新输入添加到消息历史中
-        interrupted_state["messages"].append(HumanMessage(content=text))
-        
-        # 清除中断标志，因为我们即将恢复执行
-        if "ask_human" in interrupted_state:
-            del interrupted_state["ask_human"]
-        
-        # 清理全局存储
-        del interrupted_sessions[session_id]
-        
-        # 恢复图的执行
-        logging.info("正在恢复图的执行...")
-        try:
-            # 恢复时也需要传入 config（相同的 thread_id）
-            config = {
-                "configurable": {
-                    "thread_id": session_id,
-                    "user_id": user_id
-                }
-            }
-            
-            final_state_data = None
-            async for event in agent_graph.astream(interrupted_state, config):
-                if isinstance(event, dict) and event:
-                    event_value = list(event.values())[0]
-                    # 检查节点的输出是否为我们需要的状态字典
-                    if isinstance(event_value, dict) and "messages" in event_value:
-                        final_state_data = event_value
-            
-            # 检查恢复后是否又需要暂停
-            # 为ture
-            if final_state_data.get("ask_human"):
-                logging.info("图恢复执行后再次请求用户输入。")
-                interrupted_sessions[session_id] = final_state_data
-                return {
-                    "type": "human_input_required", 
-                    "summary": final_state_data["ask_human"],
-                    "session_paused": True
-                }
-            
-            # 正常处理完成的结果
-            return process_final_result(final_state_data)
-            
-        except Exception as e:
-            logging.error(f"恢复图执行时发生错误: {e}", exc_info=True)
-            return {"type": "text", "summary": f"恢复执行时出现错误: {e}"}
-    
-    # 1. 获取历史消息
-    history_messages_raw = get_chat_history(session_id, user_id, limit=20)
-    
-    
-    # 配置（两种情况都需要）
+    # 配置：使用 session_id 作为 thread_id，让 Checkpointer 自动管理状态
     config = {
         "configurable": {
             "thread_id": session_id,
@@ -722,54 +662,74 @@ async def ai_call(text, user_id, username, session_id):
         }
     }
     
-    if not history_messages_raw:
-        # === 场景1：第一次对话，构建完整的初始状态 ===
-        logging.info("第一次对话，创建新的初始状态")
+    # --- 检查是否是恢复中断的会话 ---
+    if session_id in interrupted_sessions:
+        logging.info(f"检测到会话 {session_id} 正在恢复中断...")
         
-        chat_history = [HumanMessage(content=text)]
+        # 使用 Command(resume=...) 恢复执行，传入用户输入
+        input_data = Command(resume=text)
         
-        initial_state = {
-            "messages": chat_history,
+        # 清除中断标记
+        del interrupted_sessions[session_id]
+        
+    else:
+
+        logging.info(f"正常对话或第一次对话")
+        
+        # 构建输入（只需要新消息，历史由 Checkpointer 管理）
+        input_data = {
+            "messages": [HumanMessage(content=text)],
             "user_id": user_id,
             "username": username,
             "session_id": session_id
         }
-    else:
-        logging.info(f"后续对话，尝试从 checkpoint 恢复")
     
-        initial_state = {
-            "messages": [HumanMessage(content=text)]
-        }
-
-    # 4. 异步调用我们编译好的 LangGraph agent
-    logging.info(f"正在为用户 {username} 调用 LangGraph Agent...")
+    #  执行图 
     try:
-
-        config = {
-            "configurable": {
-                "thread_id": session_id,  # 使用 session_id 作为 thread 标识
-                "user_id": user_id        # 额外信息，用于日志和调试
-            }
-        }
+        final_state_data = None
+        interrupt_info = None
         
-        # 使用 ainvoke 直接获取最终状态，传入 config
-        final_state_data = await agent_graph.ainvoke(initial_state, config)
-
-
-        # 5. 根据最终状态格式化响应
-        # 检查图是否需要暂停以等待用户输入
-        if final_state_data.get("ask_human"):
-            logging.info("Graph 请求用户输入，流程暂停。")
-            interrupted_sessions[session_id] = final_state_data
+        # 使用 astream 流式执行，可以捕获 interrupt 事件
+        async for event in agent_graph.astream(input_data, config):
+            logging.info(f"收到事件: {list(event.keys())}")
+            
+            # 检查是否遇到 interrupt
+            if "__interrupt__" in event:
+                interrupt_info = event["__interrupt__"]
+                logging.info(f"检测到 interrupt: {interrupt_info}")
+                break
+            
+            # 收集正常的状态更新
+            if isinstance(event, dict) and event:
+                # 获取事件的值（节点更新）
+                for node_name, node_output in event.items():
+                    if isinstance(node_output, dict) and "messages" in node_output:
+                        final_state_data = node_output
+        
+        if interrupt_info:
+            # 提取 interrupt 传递的问题
+            # interrupt_info 是一个元组，第一个元素是 Interrupt 对象
+            interrupt_obj = interrupt_info[0] if isinstance(interrupt_info, (list, tuple)) else interrupt_info
+            
+            # Interrupt 对象有 value 属性，包含实际的问题文本
+            question = interrupt_obj.value if hasattr(interrupt_obj, 'value') else str(interrupt_obj)
+            
+            # 标记会话为中断状态
+            interrupted_sessions[session_id] = True
+            
+            logging.info(f"图已暂停，等待用户输入。问题: {question}")
             return {
-                "type": "human_input_required", 
-                "summary": final_state_data["ask_human"],
-                "session_paused": True
+                "type": "human_input_required",
+                "summary": question
             }
         
-        # 正常处理完成的结果
-        return process_final_result(final_state_data)
-        
+        if final_state_data:
+            return process_final_result(final_state_data)
+        else:
+            # 如果没有收集到状态，直接获取最终状态
+            final_state_data = await agent_graph.aget_state(config)
+            return process_final_result(final_state_data.values)
+            
     except Exception as e:
         logging.error(f"执行 LangGraph Agent 时发生错误: {e}", exc_info=True)
         return {"type": "text", "summary": f"处理请求时出现错误: {e}"}
@@ -1420,7 +1380,7 @@ if __name__ == '__main__':
 
     logging.info("正在根据 LLM 和 MCP 会话创建 Agent Graph...")
     
-    agent_graph = create_graph(llm, mcp_session, background_event_loop)
+    agent_graph = create_graph(llm, mcp_session)
     logging.info("Agent Graph 创建成功。")
     # -------------------------------------------------------------------- 
     logging.info("MCP 连接就绪，启动 Flask 应用服务器...")

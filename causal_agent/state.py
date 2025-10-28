@@ -32,7 +32,6 @@ class CausalChatState(TypedDict):
 
         # Fields for final output and flow control
         final_report: Optional[str]
-        ask_human: Optional[str] # If not None, this is the question to ask the user, and the graph should pause.
     """
     # === 关键修改：为 messages 添加 reducer ===
     messages: Annotated[List[BaseMessage], add]
@@ -58,8 +57,7 @@ class CausalChatState(TypedDict):
     # 报告
     final_report: Optional[str]
     
-    # 中断
-    ask_human: Optional[str]
+
     
     # 可视化结果
     visualizations: Optional[dict]

@@ -13,6 +13,7 @@ import numpy as np
 import networkx as nx
 from mcp import ClientSession
 from langgraph.func import task
+from langgraph.types import interrupt
 
 ## 基本配置
 from config.settings import settings
@@ -26,6 +27,7 @@ from causal_agent.back_prompt import data_prompt
 from causal_agent.back_prompt import causal_rag_prompt
 ## 报告人设
 from causal_agent.back_prompt import causal_report_prompt
+
 # 数据库
 from Database.agent_connect import get_file_content, get_recent_file
 # 处理llm的输出，提取json对象
@@ -166,7 +168,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
             - 如果用户明确提到了文件名，请提取它。
             - 如果用户只是说“分析数据”或“用最新的文件”，没有指定具体名称，请将 `filename` 字段留空。
-            - 如果用户提到了目标或处理变量，请提取它们。如果没提，就留空。
+            - 如果用户提到了目标或处理变量，请提取它们。如果没提，请填写为“None”。
 
             示例:
             - 用户: "用 `marketing_campaign.csv` 帮我分析一下'销售额'和'促销活动'的关系..."
@@ -219,6 +221,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         if filename :
             file_content_bytes = get_file_content(user_id, filename)
             state['fold_name'] = filename
+            
             # 注意这里的文件名后续并没有用到
             loaded_filename = filename
         elif state.get('fold_name'):
@@ -239,11 +242,12 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     except Exception as e:
         error_msg = f"在文件加载或解析阶段发生错误: {e}"
         logging.error(error_msg, exc_info=True)
-        state["ask_human"] = error_msg
         
-        recommend_message = AIMessage(content=f"决策：文件加载或解析阶段发生错误: {e}", name="fold")
-        # 只返回新消息
-        return {"messages": [recommend_message], "ask_human": state["ask_human"]}
+        # 使用 interrupt() 暂停并等待用户输入
+        user_response = interrupt(error_msg)
+        new_message = HumanMessage(content=user_response)
+        
+        return {"messages": [new_message]}
 
     ## 优化：只保存 file_content 和摘要，不保存 DataFrame
     # 原因：DataFrame 序列化体积大，file_content 可随时重新生成 DataFrame
@@ -251,14 +255,14 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     # state['dataframe'] = df  # 避免序列化开销
     state['analysis_parameters'] = data_summary
     
-    # 4. 运行确定性验证
+    # 运行确定性验证
     is_ready, issues, recommends = validate_analysis(
         data_summary, 
         target=target, 
         treatment=treatment
     )
 
-    # 5. 根据验证结果决策
+    # 根据验证结果决策
     if is_ready == 0 or is_ready == 1:
         logging.info("验证通过，进入预处理节点。")
         state['analysis_parameters'].update({"target": target, "treatment": treatment})
@@ -295,10 +299,24 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             f"作为参考，您的数据中包含以下可用列：\n`{', '.join(columns_list)}`\n\n"
             f"**{call_to_action}**"
         )
-        state["ask_human"] = question
-        recommend_message = AIMessage(content=f"决策：信息不全，需要人工干预。{question}", name="fold")
-        # 只返回新消息
-        return {"messages": [recommend_message], "ask_human": state["ask_human"], "fold_name": state['fold_name'], "file_content": state['file_content'], "analysis_parameters": state['analysis_parameters']}
+        
+        # interrupt() 会立即暂停节点执行，返回 question 给调用者
+        # 当用户提供输入后，interrupt() 会返回用户的输入值
+        user_response = interrupt(question)
+        
+        logging.info(f"用户提供的响应: {user_response}")
+        
+        # 将用户的响应添加到消息历史，并返回一个路由消息
+        # 让 fold_router 知道需要回到 agent 重新判断
+        return {
+            "messages": [
+                HumanMessage(content=user_response),
+                AIMessage(content="决策：已收到用户输入，返回 agent 重新判断", name="fold")
+            ],
+            "fold_name": state['fold_name'],
+            "file_content": state['file_content'],
+            "analysis_parameters": state['analysis_parameters']
+        }
 
 
 def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
@@ -319,10 +337,11 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     if file_content is None or not analysis_parameters:
         error_msg = "无法执行预处理，因为数据或其摘要信息在状态中丢失。"
         logging.error(error_msg)
-        state["ask_human"] = error_msg
-        recommend_message = AIMessage(content=f"决策：无法执行预处理，因为数据或其摘要信息在状态中丢失。", name="preprocess")
-        # 只返回新消息
-        return {"messages": [recommend_message], "ask_human": state["ask_human"]}
+        
+        user_response = interrupt(error_msg)
+        new_message = HumanMessage(content=user_response)
+        
+        return {"messages": [new_message]}
 
     # 动态生成 DataFrame（从 file_content）
     df = pd.read_csv(io.StringIO(file_content))
@@ -426,6 +445,9 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     
     logging.info("--- 因果分析和RAG查询均已完成 ---")
     
+    state["causal_analysis_result"] = causal_task_result
+    state["knowledge_base_result"] = rag_task_result
+    
     # 根据主要工具（因果分析）的结果来决定下一步
     if causal_task_result.get("success"):
         response_message = AIMessage(
@@ -435,8 +457,8 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
         # 只返回新消息和需要更新的状态
         return {
             "messages": [response_message],
-            "causal_analysis_result": causal_task_result,
-            "knowledge_base_result": rag_task_result,
+            "causal_analysis_result": state["causal_analysis_result"],
+            "knowledge_base_result": state["knowledge_base_result"],
             "tool_call_request": True
         }
     
@@ -450,8 +472,8 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
         # 只返回新消息和需要更新的状态
         return {
             "messages": [response_message],
-            "causal_analysis_result": causal_task_result,
-            "knowledge_base_result": rag_task_result,
+            "causal_analysis_result": state["causal_analysis_result"],
+            "knowledge_base_result": state["knowledge_base_result"],
             "tool_call_request": False
         }
 
@@ -606,8 +628,8 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
          1. 报告格式为markdown格式
          2. 报告内容包括：
             - 分析总结：需要概括性的总结因果分析结果
-            - 分析过程：需要详细描述分析的过程
-            - 分析结果：总结分析                          
+            - 分析过程：需要详细描述分析的过程，每个步骤需要详细且专业
+            - 分析结果：简要总结分析                          
          """
     )
     
@@ -707,15 +729,3 @@ def inquiry_answer_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     # 只返回新消息
     return {"messages": [AIMessage(content=response, name="inquiry_answer")]}
 
-def ask_human_node(state: CausalChatState) -> dict:
-    """
-    人机交互模块
-    此节点是图暂停以等待用户输入的地方。图的编译设置为在此节点运行之前中断。
-    主应用逻辑将从状态的 'ask_human' 字段中获取问题，并在获得用户响应后，
-    用更新过的消息历史恢复执行。
-    """
-    logging.info("--- 步骤: 人机交互节点 (已从中断中恢复，继续执行) ---")
-    if "ask_human" in state:
-        state.pop("ask_human")
-
-    return state

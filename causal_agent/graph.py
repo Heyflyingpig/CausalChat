@@ -33,7 +33,8 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
     workflow.add_node("report", report_node_with_llm)
     workflow.add_node("normal_chat", nodes.normal_chat_node)
     workflow.add_node("inquiry_answer", inquiry_answer_node_with_llm)
-    workflow.add_node("ask_human", nodes.ask_human_node)
+
+    
     # Set the entry point of the graph
     workflow.set_entry_point("agent")
 
@@ -53,7 +54,7 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
         edges.fold_router,
         {
             "preprocess": "preprocess",
-            "ask_human": "ask_human"
+            "agent": "agent"  
         }
     )
     
@@ -79,13 +80,7 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
             "report": "report"
         }
     )
-    workflow.add_conditional_edges(
-        "ask_human",
-        edges.ask_human_router,
-        {
-            "agent": "agent"
-        }
-    )
+
  
     # Define the end points of the graph. A graph can have multiple finishing points.
     workflow.add_edge("report", END)
@@ -120,12 +115,9 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
         logging.warning(f" Checkpointer 初始化失败，将不启用持久化: {e}")
         checkpointer = None
 
-    # Compile the graph into a runnable application
-    # 通过设置 `interrupt_before`, 我们告诉图在执行 `ask_human` 节点之前暂停。
-    # 通过传入 `checkpointer`，启用持久化功能（对话记忆、状态恢复、容错）
+
     app = workflow.compile(
-        checkpointer=checkpointer,  # ← 关键：传入 checkpointer
-        interrupt_before=["ask_human"]
+        checkpointer=checkpointer  #
     )
     
     return app
