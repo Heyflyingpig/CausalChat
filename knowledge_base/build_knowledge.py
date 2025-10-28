@@ -2,7 +2,7 @@ import os
 from langchain.docstore.document import Document
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # 使用os.path.join确保路径在Windows和Linux上都能正常工作
