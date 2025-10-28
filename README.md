@@ -332,3 +332,9 @@ python Run_causal.py
   - 【内容新增】：增加inquiry_answer节点，实现对用户追问的回答
   - 【bug修复】： 修复目前节点的reducer机制，修复state中的reducer机制，实现消息记录的补充说明
   - 【bug修复】： 主程序对checkpoint的响应逻辑补充，补充config配置，修复对多次回答的逻辑缺失
+  - 【内容新增】：补充Alembic数据库迁移功能
+
+---
+2025.10.28
+  - 【内容重构】：重构工具执行节点，补充@task工具，支持数据库的task支持
+  
