@@ -336,5 +336,5 @@ python Run_causal.py
 
 ---
 2025.10.28
-  - 【内容重构】：重构工具执行节点，补充@task工具，支持数据库的task支持
-  
+  - 【内容重构】：重构工具执行节点，封装@task工具，支持数据库的task支持
+  - 【bug修复】：重构human in loop节点，支持interrupt机制，支持用户输入的传递
