@@ -1,0 +1,98 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# --- 虚拟环境目录 ---
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- IDE和编辑器配置 ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.cursor/
+
+# --- Git相关 ---
+.git/
+.gitignore
+.gitattributes
+
+
+# --- 敏感信息---
+secrets.json
+.env
+.env.local
+*.pem
+*.key
+*.cert
+
+
+# --- 测试和文档 ---
+tests/
+test_*.py
+*.md
+*.txt
+!requirements.txt
+
+# 原因：
+# - 测试文件运行时不需要
+# - *.md: README等文档不需要
+# - *.txt: 一般的文本文件不需要
+# - !requirements.txt: 例外！这个必须保留（!表示反向排除）
+#   因为Dockerfile中需要用它来安装依赖
+
+# --- 日志和临时文件 ---
+*.log
+*.sqlite3
+*.db
+logs/
+tmp/
+temp/
+
+# 原因：
+# - 本地开发产生的日志不应该打包进镜像
+# - 容器应该产生自己的日志
+# - SQLite等本地数据库文件也不应该打包
+
+# --- 构建产物 ---
+dist/
+build/
+*.egg-info/
+.eggs/
+
+
+# --- 数据文件和大文件 ---
+*.csv
+*.pkl
+*.h5
+*.parquet
+杂项/
+项目规划/
+Document/
+
+# 知识库相关（特殊处理）
+# 但knowledge_base/db（向量数据库）应该通过卷挂载
+knowledge_base/source/
+knowledge_base/models/
+knowledge_base/db/
+knowledge_base/__pycache__/
+
+
+# - db目录是ChromaDB的持久化数据，很大且应该持久化
+# - 通过卷挂载可以让数据在容器重建后保留
+# - 如果打包进镜像，每次重建镜像都会丢失数据
+
+#Docker相关
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+
