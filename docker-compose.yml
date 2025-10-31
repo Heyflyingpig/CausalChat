@@ -1,0 +1,110 @@
+# CausalChat Docker Compose 配置文件（开发环境）
+
+services:
+
+  mysql:
+    image: mysql:8.0
+    
+    container_name: causalchat_mysql
+    # 原因：
+    # - 指定容器名称，便于识别和管理
+    # - 不指定的话，会自动生成名字如 causalchat_mysql_1
+    # - 固定名称便于日志查看和调试
+    
+    environment:
+      # MySQL的环境变量配置
+      # 这些变量会被MySQL容器的启动脚本读取并初始化数据库
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    
+    ports:
+      - "3307:3306"  # 宿主机3307 → 容器3306（MySQL默认端口）
+    
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+    
+    networks:
+      - causalchat_network
+    
+    
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    
+  # --- Flask 应用服务 ---
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: causalchat_app
+    
+    environment:
+      - MYSQL_HOST=mysql
+      
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      
+      # --- AI模型配置 ---
+      - API_KEY=${API_KEY}
+      - BASE_URL=${BASE_URL}
+      - MODEL=${MODEL}
+      
+      # --- Flask配置 ---
+      - SECRET_KEY=${SECRET_KEY}
+      - FLASK_ENV=development
+
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-}
+
+    
+    ports:
+      - "5001:5001"
+    
+    # 原因：暴露Flask服务端口到宿主机
+    # 这样可以在Windows浏览器中访问 http://localhost:5001
+    
+    volumes:
+      # 代码实时同步 
+      - .:/app
+
+      # 排除项（匿名卷）
+      - /app/__pycache__
+      - /app/杂项
+
+      - ./models:/app/models:ro 
+      - ./knowledge_base/db:/app/knowledge_base/db
+      - ./static/generated_graphs:/app/static/generated_graphs
+      # 原因：
+      # - 知识库数据和生成的图表需要持久化
+      # - 容器重建后这些数据不应该丢失
+      # - 绑定挂载（而非命名卷）：方便在Windows直接查看
+    
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+    
+    networks:
+      - causalchat_network
+      
+    restart: unless-stopped
+    
+
+networks:
+  causalchat_network:
+    driver: bridge
+
+
+volumes:
+  mysql_data:
+    driver: local
+
+

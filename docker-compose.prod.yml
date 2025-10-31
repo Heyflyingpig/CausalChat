@@ -1,0 +1,251 @@
+# ==========================================
+# CausalChat Docker Compose 配置文件（生产环境）
+# ==========================================
+# 目的：用于生产部署的配置
+# 与开发环境的主要区别：
+#   1. 不挂载源代码（代码在镜像内）
+#   2. 启用自动重启
+#   3. 配置日志管理
+#   4. 不暴露MySQL端口（安全性）
+#   5. 使用构建好的镜像标签
+
+services:
+
+  # --- MySQL 数据库服务（生产配置）---
+  mysql:
+    image: mysql:8.0
+    container_name: causalchat_mysql_prod
+    
+    # 原因：添加_prod后缀，区分开发和生产容器
+    
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    
+    # 注意：生产环境应该使用更强的密码
+    # 可以考虑使用Docker secrets而不是环境变量（更安全）
+    
+    # === 关键区别1：不暴露端口 ===
+    # ports:
+    #   - "3306:3306"  # 注释掉！
+    
+    # 原因：
+    # - 生产环境不应该让外部直接访问数据库
+    # - 只有app容器需要访问MySQL
+    # - 同一网络内的容器无需端口映射就能通信
+    # - 提高安全性，防止未授权访问
+    # - 如果需要管理数据库，通过堡垒机或VPN
+    
+    volumes:
+      - mysql_data_prod:/var/lib/mysql
+    
+    # 原因：使用独立的生产数据卷
+    # - 与开发环境数据隔离
+    # - 防止误操作删除生产数据
+    
+    networks:
+      - causalchat_network_prod
+    
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    
+    # === 关键区别2：自动重启策略 ===
+    restart: unless-stopped
+    
+    # 原因：
+    # - 确保服务意外退出时自动恢复
+    # - unless-stopped：重启服务器后自动启动
+    # - 除非手动执行 docker-compose down
+    
+    # === 关键区别3：日志管理 ===
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # 原因解释（防止日志占满磁盘）：
+    # - driver: json-file 是默认日志驱动
+    # - max-size: "10m" 单个日志文件最大10MB
+    # - max-file: "3" 最多保留3个日志文件
+    # - 总日志大小：10MB × 3 = 30MB
+    # - 超过限制会自动轮转（删除最旧的）
+    # - 如果不限制，日志可能增长到几GB
+    # 生产环境可以考虑更高级的日志方案：
+    # - driver: "syslog" 发送到syslog服务器
+    # - driver: "fluentd" 集中式日志收集
+    # - driver: "awslogs" 如果在AWS上部署
+
+  # --- Flask 应用服务（生产配置）---
+  app:
+    # === 关键区别4：使用镜像而非构建 ===
+    image: causalchat:latest
+    # 原因：
+    # - 生产环境应该使用预构建的镜像
+    # - 镜像应该在CI/CD中构建并测试
+    # - 不在生产服务器上构建（减少依赖，提高安全性）
+    # 
+    # 替代方案（如果需要在服务器上构建）：
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    # image: causalchat:v1.0.0  # 给构建的镜像打标签
+    
+    container_name: causalchat_app_prod
+    
+    environment:
+      - MYSQL_HOST=mysql  # 仍然使用服务名
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - API_KEY=${API_KEY}
+      - BASE_URL=${BASE_URL}
+      - MODEL=${MODEL}
+      - SECRET_KEY=${SECRET_KEY}
+      
+      # === 关键区别5：生产环境变量 ===
+      - FLASK_ENV=production
+      
+      # 原因：
+      # - production模式关闭调试信息
+      # - 不会自动重载代码
+      # - 错误信息不暴露堆栈（安全性）
+      # - 性能优化
+    
+    ports:
+      - "5001:5001"
+    
+    # 生产环境通常会在前面加Nginx反向代理：
+    # 客户端 -> Nginx(:80/:443) -> Flask(:5001)
+    # 这样可以：
+    # - 处理HTTPS
+    # - 负载均衡
+    # - 静态文件服务
+    # - 防止DDoS
+    
+    # === 关键区别6：不挂载源代码 ===
+    volumes:
+      # 注意：不挂载 .:/app
+      # 代码已经在构建时COPY到镜像内了
+      
+      # 只挂载需要持久化的数据
+      - ./knowledge_base/db:/app/knowledge_base/db
+      - ./static/generated_graphs:/app/static/generated_graphs
+      - app_logs_prod:/app/logs  # 新增：应用日志持久化
+    
+    # 原因：
+    # - 代码在镜像内，不依赖宿主机文件系统
+    # - 镜像是不可变的（immutable），符合最佳实践
+    # - 回滚时只需切换镜像标签
+    # - 不会因为误修改文件导致问题
+    
+    depends_on:
+      mysql:
+        condition: service_healthy
+    
+    networks:
+      - causalchat_network_prod
+    
+    restart: unless-stopped
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # === 可选：资源限制 ===
+    # 生产环境建议配置资源限制，防止一个服务占用所有资源
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1.0'        # 最多使用1个CPU核心
+    #       memory: 2G         # 最多使用2GB内存
+    #     reservations:
+    #       cpus: '0.5'        # 保证至少0.5个核心
+    #       memory: 1G         # 保证至少1GB内存
+    
+    # 注意：deploy配置需要Docker Swarm或Kubernetes
+    # 如果是单机部署，使用docker run的--cpus和--memory参数
+
+networks:
+  causalchat_network_prod:
+    driver: bridge
+    # 生产环境也可以考虑：
+    # - 使用overlay网络（跨主机）
+    # - 配置防火墙规则
+    # - 设置为internal（无外网访问）
+
+volumes:
+  mysql_data_prod:
+    driver: local
+    # 生产环境的数据备份策略：
+    # 1. 定期备份此卷
+    # 2. 考虑使用外部存储（NFS, AWS EBS等）
+    # 3. 测试恢复流程
+  
+  app_logs_prod:
+    driver: local
+
+# ==========================================
+# 部署说明
+# ==========================================
+# 
+# 首次部署：
+#   1. 在服务器上准备代码和配置
+#      git clone https://github.com/your-repo/CausalChat.git
+#      cd CausalChat
+#   
+#   2. 创建生产环境配置
+#      cp env.example .env
+#      nano .env  # 填入生产环境的真实值
+#   
+#   3. 构建镜像（如果需要）
+#      docker build -t causalchat:v1.0.0 .
+#      docker tag causalchat:v1.0.0 causalchat:latest
+#   
+#   4. 启动服务
+#      docker-compose -f docker-compose.prod.yml up -d
+#   
+#   5. 初始化数据库
+#      docker-compose -f docker-compose.prod.yml exec app python Database/database_init.py
+#   
+#   6. 检查状态
+#      docker-compose -f docker-compose.prod.yml ps
+#      docker-compose -f docker-compose.prod.yml logs -f
+#
+# 更新部署：
+#   1. 拉取新代码
+#      git pull
+#   
+#   2. 重新构建镜像
+#      docker build -t causalchat:v1.1.0 .
+#      docker tag causalchat:v1.1.0 causalchat:latest
+#   
+#   3. 重启服务（滚动更新）
+#      docker-compose -f docker-compose.prod.yml up -d --no-deps --build app
+#      # --no-deps: 不重启依赖的服务（MySQL不受影响）
+#   
+#   4. 验证
+#      docker-compose -f docker-compose.prod.yml logs -f app
+#
+# 回滚：
+#   docker tag causalchat:v1.0.0 causalchat:latest
+#   docker-compose -f docker-compose.prod.yml up -d app
+#
+# 备份数据：
+#   docker run --rm \
+#     -v causalchat_mysql_data_prod:/data \
+#     -v $(pwd):/backup \
+#     alpine tar czf /backup/mysql_backup_$(date +%Y%m%d).tar.gz /data
+#
+# 监控：
+#   docker stats  # 实时查看资源使用
+#   docker-compose -f docker-compose.prod.yml logs --tail=100
+
