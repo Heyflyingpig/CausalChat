@@ -29,59 +29,79 @@ logging.basicConfig(
 )
 
 class OptimizedDatabaseInitializer:
-    def __init__(self, secrets_path="secrets.json"):
+    def __init__(self):
         """
         初始化优化的数据库初始化器
         
-        Args:
-            secrets_path (str): secrets.json 文件路径
+        配置加载方式：统一从环境变量加载
+        - Docker环境：docker-compose传递的环境变量
+        - 本地开发：.env文件（由python-dotenv加载到环境变量）
         """
-        self.secrets_path = secrets_path
         self.mysql_config = {}
         self.load_database_config()
     
     def load_database_config(self):
-        """从 secrets.json 加载数据库配置"""
+        """
+        从环境变量加载数据库配置
+        
+        优先加载.env文件到环境变量（如果存在）
+        然后统一从环境变量读取配置
+        """
+        # 先尝试加载.env文件（本地开发模式）
+        try:
+            from dotenv import load_dotenv
+            from pathlib import Path
+            
+            # 查找项目根目录的.env文件
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
+            env_path = Path(project_root) / '.env'
+            
+            if env_path.exists():
+                load_dotenv(dotenv_path=env_path)
+                logging.info(f"从 {env_path} 加载环境变量（本地开发模式）")
+        except ImportError:
+            logging.info("未安装 python-dotenv，使用系统环境变量（Docker模式）")
+        
+        # 从环境变量读取配置
         required_keys = ["MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"]
         
-        try:
-            if not os.path.exists(self.secrets_path):
-                raise FileNotFoundError(f"配置文件 {self.secrets_path} 不存在")
-            
-            with open(self.secrets_path, "r", encoding="utf-8") as f:
-                secrets_data = json.load(f)
-            
-            # 检查必需的数据库配置
-            for key in required_keys:
-                if key not in secrets_data:
-                    raise ValueError(f"配置错误: {self.secrets_path} 中缺少 '{key}'")
-            
-            self.mysql_config = {
-                'host': secrets_data["MYSQL_HOST"],
-                'user': secrets_data["MYSQL_USER"],
-                'password': secrets_data["MYSQL_PASSWORD"],
-                'database': secrets_data["MYSQL_DATABASE"]
-            }
-            
-            logging.info(f"数据库配置已从 {self.secrets_path} 成功加载")
-            
-        except json.JSONDecodeError as e:
-            logging.error(f"解析配置文件 {self.secrets_path} 失败: {e}")
-            raise
-        except Exception as e:
-            logging.error(f"加载数据库配置时发生错误: {e}")
-            raise
+        self.mysql_config = {
+            'host': os.environ.get('MYSQL_HOST'),
+            'user': os.environ.get('MYSQL_USER'),
+            'password': os.environ.get('MYSQL_PASSWORD'),
+            'database': os.environ.get('MYSQL_DATABASE')
+        }
+        
+        # 检查必需配置是否完整
+        missing_keys = [k for k, v in zip(required_keys, self.mysql_config.values()) if not v]
+        
+        if missing_keys:
+            error_msg = (
+                f"配置错误: 缺少环境变量 {missing_keys}\n"
+                f"请确保：\n"
+                f"  - Docker环境：.env文件包含所有配置\n"
+                f"  - 本地开发：项目根目录存在.env文件\n"
+                f"当前配置：{self.mysql_config}"
+            )
+            logging.error(error_msg)
+            raise ValueError(error_msg)
+        
+        logging.info(f"数据库配置已从环境变量成功加载: host={self.mysql_config['host']}, database={self.mysql_config['database']}")
     
     def create_database_if_not_exists(self):
         """创建数据库（如果不存在）"""
         try:
-            # 连接到 MySQL 服务器（不指定数据库）
-            logging.info(f"尝试连接到 MySQL 服务器: host={self.mysql_config['host']}, user={self.mysql_config['user']}")
+            # 使用root用户连接MySQL服务器（创建数据库需要权限）
+            # Docker环境下，使用环境变量中的MYSQL_ROOT_PASSWORD
+            root_password = os.environ.get('MYSQL_ROOT_PASSWORD') or self.mysql_config['password']
+            
+            logging.info(f"尝试连接到 MySQL 服务器: host={self.mysql_config['host']}, user=root")
             
             conn_server = mysql.connector.connect(
                 host=self.mysql_config['host'],
-                user=self.mysql_config['user'],
-                password=self.mysql_config['password']
+                user='root',  # 使用root用户创建数据库
+                password=root_password
             )
             
             cursor_server = conn_server.cursor()
