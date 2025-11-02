@@ -1,4 +1,4 @@
-<!-- static/index.html -->
+    <!-- static/index.html -->
 <!DOCTYPE html>
     <html>
 <head>
@@ -8,13 +8,11 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="static/js/marked.min.js">
     </script>
-    <!-- 新增：引入 vis-network 图表库的 CSS 和 JS -->
     <link href="https://unpkg.com/vis-network/standalone/umd/vis-network.min.css" rel="stylesheet" type="text/css" />
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-    <!-- 结束新增 -->
 </head>
 <body>
-    <!-- 新增：登录/注册覆盖层 -->
+    <!-- 登录/注册覆盖层 -->
     <div id="authOverlay">
         <div class="auth-container">
             <!-- 登录表单 -->
@@ -55,13 +53,13 @@
         </div>
     </div>
 
-    <!-- 新增：用户信息弹窗 -->
+    <!-- 用户信息弹窗 -->
     <div id="userInfoPopup">
         <h3>用户信息</h3>
         <div id="userInfoContent">
             <!-- 用户名将在这里显示 -->
         </div>
-        <!-- 新增按钮容器 -->
+        <!-- 按钮容器 -->
         <div class="popup-button-container">
             <button id="logoutButton">退出登录</button>
             <button id="closePopupButton">关闭</button>
@@ -69,7 +67,7 @@
     </div>
 
     <!-- 设置 -->
-    <div id="settingPopup" class="setting-popup"> <!-- 新增 -->
+    <div id="settingPopup" class="setting-popup"> 
         <h3>设置</h3> <!-- 居中标题 -->
         <div id="settingOptions"> <!-- 选项容器 -->
             <div class="setting-option" data-option="userAgreement">用户协议</div> <!-- 选项1 -->
@@ -85,7 +83,7 @@
             <button id="backToSettingsButton" style="display: none;">返回</button> <!-- 新增返回按钮, 默认隐藏 -->
             <button id="hideSettingPopupButton">关闭</button> <!-- 保持关闭按钮 -->
        </div>
-    </div> <!-- settingPopup 的结束标签 -->
+    </div> 
 
     <!-- 侧边栏图标 -->
     <div class="menu-icon" id="menuIcon">☰</div>

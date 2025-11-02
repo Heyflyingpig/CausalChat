@@ -16,6 +16,7 @@ from mcp.client.stdio import stdio_client
 from contextlib import AsyncExitStack
 import threading
 import hashlib
+import bcrypt
 
 try:
     from config.settings import settings
@@ -51,7 +52,7 @@ logging.getLogger().setLevel(logging.INFO)
 
 
 app = Flask(__name__, static_folder='static')
-# --- 新增：为 Flask Sessions 设置密钥 ---
+# --- 为 Flask Sessions 设置密钥 ---
 # 会话管理（例如登录状态）需要一个密钥来对 cookie 进行加密签名。
 # 这是支持多用户并发会话的基础。
 # 我们将从新的配置模块中加载它。
@@ -94,7 +95,7 @@ def initialize_llm():
         streaming=False,
     )
     logging.info("LLM 实例初始化成功。")
-    # --- 新增：Agent Graph 的创建将推迟到 MCP 连接就绪后 ---
+    # --- Agent Graph 的创建将推迟到 MCP 连接就绪后 ---
     return True
 
 
@@ -210,16 +211,33 @@ def find_user(username):
         logging.error(f"查找用户 '{username}' 时发生未知错误: {e}")
         return None
 
+def hash_password(password):
+    hashed_password = bcrypt.hashpw(
+        password.encode('utf-8'), 
+        bcrypt.gensalt(rounds=12)).decode('utf-8')
+    
+    return hashed_password
 
 # 注册用户
-def register_user(username, hashed_password):
+def register_user(username, plain_password):
+    """
+    注册新用户，使用 bcrypt 对明文密码进行哈希。
+    
+    Args:
+        username: 用户名
+        plain_password: 前端发送的明文密码（通过HTTPS保护）
+    
+    Returns:
+        (success: bool, message: str)
+    """
     if find_user(username): # 首先检查用户是否存在
         return False, "用户名已被注册。"
 
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            # MySQL 使用 %s 作为占位符
+            # 使用 bcrypt 对明文密码进行哈希（包含自动生成的盐值）
+            hashed_password = hash_password(plain_password)
             cursor.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)",
                            (username, hashed_password))
             conn.commit()
@@ -278,22 +296,30 @@ def get_chat_history(session_id: str, user_id: int, limit: int) -> list:
 # 获取注册值,检查注册值
 @app.route('/api/register', methods=['POST'])
 def handle_register():
+    """
+    处理用户注册请求。
+    接收前端通过HTTPS发送的明文密码，在后端使用bcrypt进行哈希。
+    """
     data = request.json
     username = data.get('username')
-    hashed_password = data.get('password') # 前端已经哈希过了
+    plain_password = data.get('password')  # 接收明文密码（HTTPS保护传输）
 
-    if not username or not hashed_password:
+    if not username or not plain_password:
         return jsonify({'success': False, 'error': '缺少用户名或密码'}), 400
 
-    # 基本的用户名和密码格式验证 (可选)
+    # 基本的用户名和密码格式验证
     if len(username) < 3:
-         return jsonify({'success': False, 'error': '用户名至少需要3个字符'}), 400
-    # 密码哈希的长度通常是固定的 (SHA256 是 64 个十六进制字符)
-    if len(hashed_password) != 64:
-         return jsonify({'success': False, 'error': '密码格式无效'}), 400
+        return jsonify({'success': False, 'error': '用户名至少需要3个字符'}), 400
+    
+    # 密码长度验证（建议至少6位，可根据需求调整）
+    if len(plain_password) < 6:
+        return jsonify({'success': False, 'error': '密码至少需要6个字符'}), 400
+    
+    # 可选：添加密码强度验证
+    # if not any(c.isdigit() for c in plain_password):
+    #     return jsonify({'success': False, 'error': '密码必须包含至少一个数字'}), 400
 
-
-    success, message = register_user(username, hashed_password)
+    success, message = register_user(username, plain_password)
     if success:
         return jsonify({'success': True})
     else:
@@ -302,14 +328,18 @@ def handle_register():
 # 检查登录值
 @app.route('/api/login', methods=['POST'])
 def handle_login():
+    """
+    处理用户登录请求。
+    接收前端通过HTTPS发送的明文密码，使用bcrypt进行验证。
+    """
     # --- 重构：使用 Flask Session 进行会话管理 ---
     from flask import session
 
     data = request.json
     username = data.get('username')
-    hashed_password_from_client = data.get('password') # 前端已经哈希过了
+    plain_password = data.get('password')  # 接收明文密码（HTTPS保护传输）
 
-    if not username or not hashed_password_from_client:
+    if not username or not plain_password:
         return jsonify({'success': False, 'error': '缺少用户名或密码'}), 400
 
     user_data = find_user(username)
@@ -317,9 +347,10 @@ def handle_login():
     if not user_data:
         return jsonify({'success': False, 'error': '用户名不存在'}), 401 # 401 Unauthorized
 
-    # 比较哈希值
-    stored_hashed_password = user_data["password_hash"]
-    if stored_hashed_password == hashed_password_from_client:
+    # 使用 bcrypt 验证密码
+    # bcrypt.checkpw() 会自动从存储的哈希中提取盐值进行验证
+    stored_hashed_password = user_data["password_hash"].encode('utf-8')
+    if bcrypt.checkpw(plain_password.encode('utf-8'), stored_hashed_password):
         logging.info(f"用户登录成功: {username}")
         
         # --- 核心修改：在 Session 中存储用户信息 ---
@@ -349,7 +380,7 @@ def handle_logout():
 
     return jsonify({'success': True})
 
-# --- 新增：检查认证状态 API 端点 ---
+# --- 检查认证状态 API 端点 ---
 @app.route('/api/check_auth', methods=['GET'])
 def check_auth():
     """检查当前后端记录的登录状态"""
@@ -444,7 +475,7 @@ def handle_message():
 
     data = request.json
     user_input = data.get('message', '')
-    session_id = data.get('session_id') # <--- 新增：从前端获取会话ID
+    session_id = data.get('session_id') # <--- 从前端获取会话ID
 
     if not session_id:
         logging.error(f"用户 {username} (ID: {user_id}) 发送消息时缺少 session_id")
@@ -538,7 +569,7 @@ def initialize_rag_system():
 
 
 
-# --- 新增：LangChain Agent 的 MCP 工具封装 ---
+# --- LangChain Agent 的 MCP 工具封装 ---
 # 这里是对mcp格式的langchain翻译，翻译成一个类
 # 目前的逻辑下，并没有使用该方法
 def create_pydantic(schema: dict, model_name: str) -> Type[BaseModel]:
@@ -1055,7 +1086,7 @@ def load_session_content():
  
 @app.route('/api/change_session', methods=['POST'])
 def change_session():
-    # --- 新增：用户认证检查 ---
+    # --- 用户认证检查 ---
     from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
@@ -1387,6 +1418,10 @@ if __name__ == '__main__':
     # 启动 Flask 应用
     # use_reloader=False 是必须的，因为重载器会启动一个子进程，
     # 这会干扰我们已经手动管理的 MCP 子进程和事件循环。
-    app.run(host='127.0.0.1', port=5001, debug=True, use_reloader=False)
+    # 
+    # Docker环境注意：
+    # - host='0.0.0.0' 监听所有网络接口，允许容器外部访问
+    # - host='127.0.0.1' 只允许容器内部访问，Docker端口映射会失效
+    app.run(host='0.0.0.0', port=5001, debug=True, use_reloader=False)
 
     

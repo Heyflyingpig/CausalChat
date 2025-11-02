@@ -1,4 +1,4 @@
-// --- 新增：认证相关变量和函数 ---
+// --- 认证相关变量和函数 ---
 const authOverlay = document.getElementById('authOverlay');
 const loginForm = document.getElementById('loginForm');
 const registerForm = document.getElementById('registerForm');
@@ -16,11 +16,11 @@ const backToSettingsButton = document.getElementById('backToSettingsButton'); //
 const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上传器
 const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上传按钮
 const chatArea = document.getElementById('chatArea');
-// --- 新增：全局变量存储当前会话的用户名 ---
+//全局变量存储当前会话的用户名 ---
 let currentUsername = null;
-let currentSessionId = null; // <--- 新增：全局变量跟踪当前会话ID
-let isNewSessionPendingDisplay = false; // --- 新增：用于跟踪新会话是否已在UI中临时显示
-let chatEventListenersAttached = false; // 新增：跟踪事件监听器是否已附加
+let currentSessionId = null; // <--- 全局变量跟踪当前会话ID
+let isNewSessionPendingDisplay = false; // --- 用于跟踪新会话是否已在UI中临时显示
+let chatEventListenersAttached = false; // 跟踪事件监听器是否已附加
 
 // 切换登录和注册表单
 function toggleAuthForms() {
@@ -35,15 +35,7 @@ function toggleAuthForms() {
     }
 }
 
-// 密码哈希函数 (使用 Web Crypto API - 异步)
-async function hashPassword(password) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data); // 使用 SHA-256
-    const hashArray = Array.from(new Uint8Array(hashBuffer)); // 转换为字节数组
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join(''); // 转换为十六进制字符串
-    return hashHex;
-}
+
 
 // 处理注册
 async function handleRegister() {
@@ -66,12 +58,11 @@ async function handleRegister() {
     }
 
     try {
-        const hashedPassword = await hashPassword(password); // 哈希密码
-
+        // 直接发送明文密码（通过 HTTPS 保护传输，后端使用 bcrypt 进行哈希）
         const response = await fetch('/api/register', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ username: username, password: hashedPassword }) // 发送哈希后的密码
+            body: JSON.stringify({ username: username, password: password }) // 发送明文密码
         });
         const data = await response.json();
 
@@ -92,7 +83,7 @@ async function handleRegister() {
     }
 }
 
-// 处理登录 - **修改**
+// 处理登录 - 
 async function handleLogin() {
     const usernameInput = document.getElementById('loginUsername'); // 获取输入元素
     const passwordInput = document.getElementById('loginPassword'); // 获取输入元素
@@ -106,12 +97,10 @@ async function handleLogin() {
     }
 
     try {
-        const hashedPassword = await hashPassword(password); // 哈希密码
-
         const response = await fetch('/api/login', {
              method: 'POST',
              headers: {'Content-Type': 'application/json'},
-             body: JSON.stringify({ username: username, password: hashedPassword })
+             body: JSON.stringify({ username: username, password: password})
         });
         const data = await response.json();
 
@@ -125,39 +114,39 @@ async function handleLogin() {
             setupChatEventListeners();
 
             updateUserInfo(); // 更新用户信息显示
-            loadHistory(); // --- 新增：先加载历史记录
-            loadFiles(); // --- 新增: 加载文件列表 ---
-            newChat(); // --- 修改：然后准备一个新对话界面
+            loadHistory(); // --- 先加载历史记录
+            loadFiles(); // ---  加载文件列表 ---
+            newChat(); // --- 然后准备一个新对话界面
              // 清空登录表单
             usernameInput.value = '';
             passwordInput.value = '';
         } else {
             loginError.textContent = data.error || '登录失败，请检查用户名和密码。';
-            currentUsername = null; // **修改**: 确保登录失败时全局变量为空
+            currentUsername = null; //  确保登录失败时全局变量为空
         }
     } catch (error) {
         console.error("Login error:", error);
         loginError.textContent = '登录过程中发生错误。';
-        currentUsername = null; // **修改**: 确保出错时全局变量为空
+        currentUsername = null; //  确保出错时全局变量为空
     }
 }
 
-// 处理退出登录 - **修改**
+// 处理退出登录 - 
 async function handleLogout() {
-    const username = currentUsername; // **修改**: 使用全局变量获取当前用户 (主要用于日志)
+    const username = currentUsername; //  使用全局变量获取当前用户 (主要用于日志)
     if (!username) return; // 如果没有当前用户，直接返回
 
     console.log(`用户 ${username} 正在请求退出登录`);
 
     try {
-         // --- 新增：调用后端登出接口 ---
+         // --- 调用后端登出接口 ---
         const response = await fetch('/api/logout', { method: 'POST' });
         const data = await response.json();
 
         if (data.success) {
             console.log("后端登出成功");
             currentUsername = null; // **修改**: 清除全局变量
-            chatEventListenersAttached = false; // --- 新增：重置监听器标志 ---
+            chatEventListenersAttached = false; // --- 重置监听器标志 ---
             document.body.classList.remove('logged-in'); // 移除标记类
             authOverlay.classList.add('active'); // 显示登录/注册层
             loginForm.style.display = 'block'; // 确保显示的是登录表单
@@ -254,7 +243,7 @@ function showSettingPopup() {
     settingOptions.style.display = 'block';
     settingContentDisplay.style.display = 'none'; // 确保内容区隐藏
     settingContentDisplay.innerHTML = ''; // 清空旧内容
-    backToSettingsButton.style.display = 'none'; // 新增：确保返回按钮隐藏
+    backToSettingsButton.style.display = 'none'; // 确保返回按钮隐藏
     settingPopup.classList.add('active'); // 添加 active 类来显示弹窗（并触发动画）
 }
 
@@ -338,7 +327,7 @@ function setupGlobalEventListeners() {
 }
 
 function setupChatEventListeners() {
-    // --- 新增：防止重复绑定 ---
+    // --- 防止重复绑定 ---
     if (chatEventListenersAttached) {
         return;
     }
@@ -370,7 +359,7 @@ function setupChatEventListeners() {
     if (userAvatar) userAvatar.addEventListener('click', showUserInfoPopup);
     if (uploadCsvButton) uploadCsvButton.addEventListener('click', triggerCsvUpload);
 
-    chatEventListenersAttached = true; // --- 新增：设置标志 ---
+    chatEventListenersAttached = true; // --- 设置标志 ---
 }
 
 // 返回设置列表
@@ -399,7 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function sendMessage() {
     const userInput = document.getElementById('userInput');
-    const sendButton = document.getElementById('sendButton'); // 新增：获取发送按钮
+    const sendButton = document.getElementById('sendButton'); // 获取发送按钮
     const message = userInput.value.trim();
 
     if (!message) {
@@ -441,7 +430,7 @@ async function sendMessage() {
     addMessage('user', message);
     userInput.value = ''; // 清空输入框
 
-    // --- 新增：禁用输入和发送按钮 ---
+    // --- 禁用输入和发送按钮 ---
     userInput.disabled = true;
     sendButton.disabled = true;
     // --------------------------------
@@ -485,7 +474,7 @@ async function sendMessage() {
         console.error("发送消息时出错:", error);
         showError('发送消息时发生网络错误。');
     } finally {
-        // --- 新增：无论成功或失败，都重新启用输入和发送按钮 ---
+        // --- 无论成功或失败，都重新启用输入和发送按钮 ---
         userInput.disabled = false;
         sendButton.disabled = false;
         userInput.focus(); // 重新聚焦到输入框，方便用户继续输入
@@ -534,7 +523,7 @@ async function handleNewChatRequest() {
         if (data.success) {
             currentSessionId = data.new_session_id;
             console.log(`新会话已创建: ${currentSessionId}`);
-            isNewSessionPendingDisplay = true; // --- 新增：标记这个新会话等待用户输入后在UI显示
+            isNewSessionPendingDisplay = true; // --- 标记这个新会话等待用户输入后在UI显示
             
             addMessage('ai', '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析');
             document.getElementById('userInput').focus();
@@ -584,7 +573,7 @@ async function handleNewChatRequest() {
     }
 }
 
-// --- 新增：为标题添加可编辑监听器的辅助函数 ---
+// ---为标题添加可编辑监听器的辅助函数 ---
 function addEditableListener(element, sessionId, title) {
     const handler = (e) => {
         e.stopPropagation();
@@ -670,7 +659,7 @@ function makeTitleEditable(previewDiv, sessionId, oldTitle) {
     });
 }
 
-// --- 新增：在前端临时添加一个会话条目，以实现即时反馈 ---
+// --- 在前端临时添加一个会话条目，以实现即时反馈 ---
 function addTemporarySessionToUI(sessionId, title) {
     console.log("正在前端临时添加新会话条目以提高UI响应性...");
 
@@ -736,7 +725,7 @@ async function loadHistory() {
         if (Object.keys(sessions).length === 0) {
             historyList.innerHTML = '<p class="history-empty-message">还没有任何对话记录。</p>';
         } else {
-            // --- 新增：用于跟踪当前打开的滑动项 ---
+            // --- 用于跟踪当前打开的滑动项 ---
             let currentlyOpenItem = null;
 
             // 重建历史记录部分
@@ -790,7 +779,7 @@ async function loadHistory() {
 
                 historyList.appendChild(historyItem);
 
-                // --- 新增：滑动逻辑 ---
+                // --- 滑动逻辑 ---
                 let isDragging = false;
                 let startX = 0;
                 let currentX = 0;
@@ -892,7 +881,7 @@ async function loadHistory() {
     }
 }
 
-// --- 新增：处理会话删除的函数 ---
+// --- 处理会话删除的函数 ---
 async function handleDeleteSession(sessionId, element) {
     if (!confirm("确定要永久删除此会话及其所有消息吗？此操作无法撤销。")) {
         return;
@@ -992,7 +981,7 @@ async function handleCsvFileSelect(event) {
         return;
     }
 
-    // --- 新增：检查会话ID ---
+    // --- 检查会话ID ---
     if (!currentSessionId) {
         showError("没有活动的会话，无法上传文件。请新建一个对话或加载历史会话。");
         // 恢复按钮状态
@@ -1034,7 +1023,7 @@ async function handleCsvFileSelect(event) {
         if (data.success) {
             // 显示成功的AI回复消息
             addMessage('ai', `已接收您的文件：${file.name}\n\n${data.message}\n\n您现在可以询问我对此文件进行因果分析。`);
-            loadFiles(); // --- 新增：刷新文件列表
+            loadFiles(); // --- 刷新文件列表
         } else {
             // 显示错误的AI回复消息
             addMessage('ai', `文件上传失败：${data.error || '未知错误'}`);
@@ -1060,7 +1049,7 @@ async function handleCsvFileSelect(event) {
     }
 }
 
-// --- 新增：渲染因果图表的函数 ---
+// --- 渲染因果图表的函数 ---
 function renderCausalGraph(containerId, graphData) {
     const container = document.getElementById(containerId);
     if (!container) {
@@ -1209,7 +1198,7 @@ function addMessage(sender, messageData, isLoading = false) {
     return messageElement;
 }
 
-// --- 新增：加载文件列表的函数 ---
+// --- 加载文件列表的函数 ---
 async function loadFiles() {
     if (!currentUsername) {
         if (fileList) fileList.innerHTML = '<p class="files-empty-message">请先登录以查看文件列表。</p>';
@@ -1360,7 +1349,7 @@ async function loadFiles() {
     }
 }
 
-// --- 新增：处理文件删除的函数 ---
+// --- 处理文件删除的函数 ---
 async function handleDeleteFile(fileId, element) {
     if (!confirm("确定要永久删除此文件吗？此操作无法撤销。")) {
         return;
