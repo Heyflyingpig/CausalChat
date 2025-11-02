@@ -180,6 +180,7 @@ config.json
 #  demo
 杂项/
 项目规划/
+Document/
 
 # test
 test.py

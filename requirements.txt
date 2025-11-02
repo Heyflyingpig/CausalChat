@@ -9,6 +9,7 @@ clr_loader==0.2.7.post0
 colorama==0.4.6
 distro==1.9.0
 Flask==3.1.0
+bcrypt>=4.0.0
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
