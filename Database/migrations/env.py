@@ -17,22 +17,39 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 
-base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-secrets_path = os.path.join(base_dir, 'secrets.json')
-
-# 加载数据库连接信息
-if os.path.exists(secrets_path):
-    with open(secrets_path) as f:
-        secrets = json.load(f)
+# 从环境变量加载数据库连接信息（Docker友好）
+# 优先从环境变量读取，其次尝试.env文件（本地开发）
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
     
-    # 设置正确的数据库连接字符串
-    config.set_main_option(
-        'sqlalchemy.url',
-        f"mysql+pymysql://{secrets['MYSQL_USER']}:{secrets['MYSQL_PASSWORD']}@"
-        f"{secrets['MYSQL_HOST']}/{secrets['MYSQL_DATABASE']}"
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    env_path = Path(base_dir) / '.env'
+    
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+except ImportError:
+    pass  # Docker环境下可能没有python-dotenv
+
+# 从环境变量读取配置
+mysql_host = os.environ.get('MYSQL_HOST')
+mysql_user = os.environ.get('MYSQL_USER')
+mysql_password = os.environ.get('MYSQL_PASSWORD')
+mysql_database = os.environ.get('MYSQL_DATABASE')
+
+# 检查必需配置
+if not all([mysql_host, mysql_user, mysql_password, mysql_database]):
+    raise ValueError(
+        "缺少数据库配置环境变量。\n"
+        "请确保.env文件包含: MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE"
     )
-else:
-    raise FileNotFoundError(f"找不到配置文件: {secrets_path}")
+
+# 设置SQLAlchemy数据库连接URL
+# 格式：mysql+pymysql://user:password@host/database
+config.set_main_option(
+    'sqlalchemy.url',
+    f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}/{mysql_database}"
+)
 
 # add your model's MetaData object here
 # for 'autogenerate' support
