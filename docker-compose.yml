@@ -52,12 +52,12 @@ services:
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE}
       
-      # --- AI模型配置 ---
+      #  AI模型配置 
       - API_KEY=${API_KEY}
       - BASE_URL=${BASE_URL}
       - MODEL=${MODEL}
       
-      # --- Flask配置 ---
+      #  Flask配置 
       - SECRET_KEY=${SECRET_KEY}
       - FLASK_ENV=development
 

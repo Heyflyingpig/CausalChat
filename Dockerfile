@@ -11,11 +11,15 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir -r requirements.txt \
+# 先安装基础依赖（很少变化）
+COPY requirements-base.txt .
+RUN pip install --no-cache-dir -r requirements-base.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple
 
+# 再安装所有依赖（包括新增的）
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
 COPY . .
 
 EXPOSE 5001
