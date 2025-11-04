@@ -71,3 +71,7 @@ networkx>=3.0
 causal-learn>=0.1.3.3
 
 openai>=1.55.3
+
+# 数据库迁移工具
+alembic==1.17.0
+PyMySQL==1.1.2
