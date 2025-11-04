@@ -17,6 +17,12 @@ def validate_analysis(analysis_params: dict, target: str = None, treatment: str 
     column_profiles = analysis_params.get("column_profiles", {})
     quality_assessment = analysis_params.get("quality_assessment", {})
     
+
+    if target == "None":
+        target = None
+    if treatment == "None":
+        treatment = None
+    
     # 缺少目标变量和处理变量不需要报错
     if not target or not treatment:
         recommends.append("缺少目标变量(target)或处理变量(treatment)的指定")
@@ -71,7 +77,7 @@ def validate_analysis(analysis_params: dict, target: str = None, treatment: str 
     if len(other_constant_columns) > 0:
         recommends.append(f"存在常数列: {', '.join(other_constant_columns[:3])}{'等' if len(other_constant_columns) > 3 else ''}将不会进入因果分析")
 
-    # --- 4. 生成建议 (非阻断性问题)
+    # 4. 生成建议 (非阻断性问题)
     datetime_columns = [col for col, profile in column_profiles.items() 
                        if profile.get('inferred_type') == 'datetime']
     if datetime_columns and len(datetime_columns) > 0:

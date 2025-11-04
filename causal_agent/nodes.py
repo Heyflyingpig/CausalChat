@@ -167,34 +167,34 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             3.  用户想要评估效果的处理变量 (treatment/intervention)。
 
             - 如果用户明确提到了文件名，请提取它。
-            - 如果用户只是说“分析数据”或“用最新的文件”，没有指定具体名称，请将 `filename` 字段留空。
-            - 如果用户提到了目标或处理变量，请提取它们。如果没提，请填写为“None”。
+            - 如果用户只是说"分析数据"或"用最新的文件"，没有指定具体名称，请将 `filename` 字段设为 null（不要使用字符串 "None"）。
+            - 如果用户提到了目标或处理变量，请提取它们。如果没提，请设为 null（不要使用字符串 "None"）。
 
             示例:
             - 用户: "用 `marketing_campaign.csv` 帮我分析一下'销售额'和'促销活动'的关系..."
             -> 提取: `filename='marketing_campaign.csv'`, `target='销售额'`, `treatment='促销活动'`
             - 用户: "分析一下我的数据，看看是什么影响了客户流失"
-            -> 提取: `filename=None`, `target='客户流失'`, `treatment=None`
+            -> 提取: `filename=null`, `target='客户流失'`, `treatment=null`
             - 用户: "帮我跑一下最新的数据"
-            -> 提取: `filename=None`, `target=None`, `treatment=None`
+            -> 提取: `filename=null`, `target=null`, `treatment=null`
             
             你必须严格按照 `foldQuery` 的 schema 返回一个 JSON 对象。
             **绝对不要**在你的回复中包含任何Markdown格式或解释性文字。
+            **重要：如果某个字段为空，请使用 JSON 的 null 值，而不是字符串 "None"。**
 
-            示例输出:
+            示例输出（所有字段都有值）:
             {{
                 "filename": "marketing_campaign.csv",
                 "target": "销售额",
                 "treatment": "促销活动"
             }}
-
-            ## 特殊情况
-            - 用户: "用 `marketing_campaign.csv` 帮我分析一下'销售额'和'促销活动'的关系..."
-            -> 提取: `filename='marketing_campaign.csv'`, `target='销售额'`, `treatment='促销活动'`
-            - 用户: "分析一下我的数据，看看是什么影响了客户流失"
-            -> 提取: `filename=None`, `target='客户流失'`, `treatment=None`
-            - 用户: "帮我跑一下最新的数据"
-            -> 提取: `filename=None`, `target=None`, `treatment=None`
+            
+            示例输出（部分字段为空）:
+            {{
+                "filename": null,
+                "target": "客户流失",
+                "treatment": null
+            }}
             
             """),
             MessagesPlaceholder(variable_name="messages"),
@@ -208,6 +208,15 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         filename = structured_response.filename
         target = structured_response.target
         treatment = structured_response.treatment
+        
+        # 转换结构
+        if filename == "None":
+            filename = None
+        if target == "None":
+            target = None
+        if treatment == "None":
+            treatment = None
+            
     except Exception as e:
         logging.error(f"无法从LLM响应中解析或验证提取信息: {e}。将返回错误值")
         filename = None
