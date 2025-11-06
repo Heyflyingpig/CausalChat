@@ -55,6 +55,8 @@ tiktoken==0.7.0
 # RAG & 数据处理相关
 chromadb==1.0.13
 langchain-chroma==0.2.4
+# sentence-transformers需要torch，使用CPU版本避免下载2GB+的CUDA库
+torch==2.7.1 
 sentence-transformers==3.0.1
 pymupdf==1.24.7
 unstructured==0.14.9
