@@ -788,4 +788,190 @@
 }
 /* --- 新增结束 --- */
 
+/* === 思考过程可视化样式（独立布局） === */
+
+/* 思考过程气泡容器 - 简洁的状态提示 */
+.thinking-bubble {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 10px;
+    padding: 0;
+    margin-bottom: 5px;  /* 减小间距，因为下方会有详情面板 */
+    max-width: 80%;
+    align-self: flex-start;
+}
+
+/* 思考过程头部 - 可点击展开/收起 */
+.thinking-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 15px;
+    cursor: pointer;  /* 显示手型光标，可点击 */
+    user-select: none;
+    transition: background-color 0.2s;
+    border-radius: 10px;
+}
+
+/* 悬停时显示背景色变化 */
+.thinking-header:hover {
+    background-color: #e9ecef;
+}
+
+/* 思考文字 */
+.thinking-text {
+    flex: 1;
+    font-size: 0.95em;
+    color: #495057;
+    font-weight: 500;
+}
+
+/* 点点点动画 */
+.thinking-dots {
+    color: #6c757d;
+    animation: thinking-dots-animation 1.4s infinite;
+    margin-right: 8px;
+}
+
+@keyframes thinking-dots-animation {
+    0%, 20% {
+        content: '.';
+    }
+    40% {
+        content: '..';
+    }
+    60%, 100% {
+        content: '...';
+    }
+}
+
+/* 展开/收起图标 */
+.expand-icon {
+    font-size: 0.8em;
+    color: #6c757d;
+    transition: transform 0.3s;
+    display: inline-block;  /* 显示图标 */
+}
+
+/* 独立的详情面板容器 */
+.thinking-detail-container {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin-bottom: 15px;
+    max-width: 80%;
+    align-self: flex-start;
+    /* 添加平滑的展开/收起动画 */
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    opacity: 1;
+    transform: scaleY(1);
+    transform-origin: top;
+}
+
+/* 隐藏时的动画效果（虽然使用display控制，但可以在JS中配合使用） */
+.thinking-detail-container.hidden {
+    opacity: 0;
+    transform: scaleY(0.95);
+}
+
+/* 详情面板 - 独立显示样式 */
+.thinking-detail {
+    padding: 10px 15px 15px;
+    border: 1px solid #dee2e6;  /* 独立边框 */
+    border-radius: 10px;  /* 四角都圆角 */
+    background-color: #ffffff;
+    max-height: 400px;
+    overflow-y: auto;
+    display: flex;  /* 启用 Flexbox 布局 */
+    flex-direction: column;  /* 让子元素（步骤项）纵向排列 */
+    gap: 6px;  /* 步骤项之间的间距 */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);  /* 添加轻微阴影增强独立感 */
+}
+
+/* 步骤项 */
+.step-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    margin-bottom: 0;  /* 改为0，因为父容器已经用 gap 控制间距 */
+    border-radius: 6px;
+    background-color: #f8f9fa;
+    transition: all 0.3s;
+}
+
+/* 步骤项状态 */
+.step-item.completed {
+    background-color: #d4edda;
+}
+
+.step-item.in-progress {
+    background-color: #fff3cd;
+    animation: pulse-progress 1.5s infinite;
+}
+
+.step-item.error {
+    background-color: #f8d7da;
+}
+
+@keyframes pulse-progress {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.8;
+    }
+}
+
+/* 状态图标 */
+.step-status {
+    font-size: 0.9em;
+    margin-right: 10px;
+    min-width: 20px;
+    text-align: center;
+}
+
+.step-item.completed .step-status {
+    color: #28a745;
+}
+
+.step-item.in-progress .step-status {
+    color: #ffc107;
+}
+
+.step-item.error .step-status {
+    color: #dc3545;
+}
+
+/* 步骤名称 */
+.step-name {
+    flex: 1;
+    font-size: 0.9em;
+    color: #495057;
+}
+
+/* 步骤时间 */
+.step-time {
+    font-size: 0.85em;
+    color: #6c757d;
+    font-style: italic;
+    margin-left: 10px;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .thinking-bubble,
+    .thinking-detail-container {
+        max-width: 95%;
+    }
+    
+    .thinking-text {
+        font-size: 0.9em;
+    }
+    
+    .step-name {
+        font-size: 0.85em;
+    }
+}
+
+/* === 思考过程样式结束 === */
+
 

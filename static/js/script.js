@@ -8,7 +8,7 @@ const userAvatar = document.getElementById('userAvatar'); //头像
 const userInfoPopup = document.getElementById('userInfoPopup');
 const userInfoContent = document.getElementById('userInfoContent');
 const historyList = document.getElementById('historyList'); // 获取 historyList 元素
-const fileList = document.getElementById('fileList'); // ---  获取 fileList 元素
+const fileList = document.getElementById('fileList'); //  获取 fileList 元素
 const settingPopup = document.getElementById('settingPopup'); // 获取设置
 const settingOptions = document.getElementById('settingOptions'); // 获取设置选项容器
 const settingContentDisplay = document.getElementById('settingContentDisplay'); // 获取内容显示区域
@@ -139,7 +139,6 @@ async function handleLogout() {
     console.log(`用户 ${username} 正在请求退出登录`);
 
     try {
-         // --- 调用后端登出接口 ---
         const response = await fetch('/api/logout', { method: 'POST' });
         const data = await response.json();
 
@@ -220,7 +219,7 @@ function updateUserInfo() {
     }
 }
 
-// 显示用户信息弹窗 - **修改**
+// 显示用户信息弹窗 - 
 function showUserInfoPopup() {
      if (!currentUsername) return; // **修改**: 使用全局变量
     userInfoPopup.classList.add('active');
@@ -421,7 +420,7 @@ async function sendMessage() {
         }
     }
 
-    // --- 核心修改：如果是一个待显示的新会话，立即在UI上创建临时条目 ---
+    // 核心修改：如果是一个待显示的新会话，立即在UI上创建临时条目
     if (isNewSessionPendingDisplay) {
         addTemporarySessionToUI(currentSessionId, message);
         isNewSessionPendingDisplay = false; // 重置标志，防止重复创建
@@ -435,43 +434,69 @@ async function sendMessage() {
     sendButton.disabled = true;
     // --------------------------------
 
-    const loadingBubble = addMessage('ai', '', true);
+    // 创建思考过程元素（独立的气泡和详情面板）
+    const thinkingElements = addThinkingMessage();
 
     try {
-        const response = await fetch('/api/send', {
+        // 使用流式端点
+        const response = await fetch('/api/send_stream', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            // --- 核心修改：在请求体中包含 session_id ---
             body: JSON.stringify({ 
                 message: message, 
-                username: currentUsername, // username 仍可用于日志记录，但后端不再依赖它进行认证
+                username: currentUsername,
                 session_id: currentSessionId 
             })
         });
 
-        // 移除加载动画
-        if (loadingBubble && loadingBubble.parentNode) {
-            loadingBubble.parentNode.removeChild(loadingBubble);
+        if (!response.ok) {
+            throw new Error(`HTTP错误: ${response.status}`);
         }
 
-        const data = await response.json();
-
-        if (data.success) {
-
-            addMessage('ai', data.response);
-            // --- 修改：在消息成功保存后，总是重新加载历史记录以更新时间和排序 ---
-            loadHistory();
-        } else {
-            showError(data.error || '从服务器获取响应失败。');
+        // 使用ReadableStream读取SSE数据
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            
+            // 解析SSE消息（以 \n\n 分隔）
+            const messages = buffer.split('\n\n');
+            buffer = messages.pop(); // 保留不完整的消息
+            
+            for (const msg of messages) {
+                if (msg.startsWith('data: ')) {
+                    try {
+                        const eventData = JSON.parse(msg.substring(6)); // 去掉 "data: " 前缀
+                        handleStreamEvent(eventData, thinkingElements);
+                    } catch (e) {
+                        console.warn('解析SSE事件失败:', msg, e);
+                    }
+                }
+            }
         }
+        
+        // 加载历史记录
+        loadHistory();
+        
     } catch (error) {
-        // Also remove loading message on error
-        if (loadingBubble && loadingBubble.parentNode) {
-            loadingBubble.parentNode.removeChild(loadingBubble);
-        }
         console.error("发送消息时出错:", error);
+        
+        // 移除思考过程的两个独立元素
+        if (thinkingElements.bubble && thinkingElements.bubble.parentNode) {
+            thinkingElements.bubble.parentNode.removeChild(thinkingElements.bubble);
+        }
+        if (thinkingElements.detailContainer && thinkingElements.detailContainer.parentNode) {
+            thinkingElements.detailContainer.parentNode.removeChild(thinkingElements.detailContainer);
+        }
+        
         showError('发送消息时发生网络错误。');
     } finally {
         // --- 无论成功或失败，都重新启用输入和发送按钮 ---
@@ -480,6 +505,236 @@ async function sendMessage() {
         userInput.focus(); // 重新聚焦到输入框，方便用户继续输入
     }
 }
+
+
+/**
+ * 创建思考过程气泡
+ */
+function addThinkingMessage() {
+    // 创建简洁的思考提示气泡
+    const bubble = document.createElement('div');
+    bubble.className = 'message ai-message thinking-bubble';
+    
+    const header = document.createElement('div');
+    header.className = 'thinking-header';
+    
+    const text = document.createElement('span');
+    text.className = 'thinking-text';
+    text.textContent = '正在思考...';
+    
+    const dots = document.createElement('span');
+    dots.className = 'thinking-dots';
+    dots.textContent = '...';
+    
+    // 添加展开/收起图标
+    const expandIcon = document.createElement('span');
+    expandIcon.className = 'expand-icon';
+    expandIcon.textContent = '▶';  // 默认收起状态
+    
+    header.appendChild(text);
+    header.appendChild(dots);
+    header.appendChild(expandIcon);
+    
+    bubble.appendChild(header);
+    
+    // 创建独立的详情面板容器
+    const detailContainer = document.createElement('div');
+    detailContainer.className = 'message ai-message thinking-detail-container';
+    detailContainer.style.display = 'none';  // 默认隐藏
+    
+    const detail = document.createElement('div');
+    detail.className = 'thinking-detail';
+    
+    detailContainer.appendChild(detail);
+    
+    // 添加点击事件来切换详情面板显示（使用闭包访问detailContainer）
+    header.onclick = () => toggleThinkingDetail(detailContainer, expandIcon);
+    
+    // 添加到聊天区域（两个独立的元素）
+    chatArea.appendChild(bubble);
+    chatArea.appendChild(detailContainer);
+    chatArea.scrollTop = chatArea.scrollHeight;
+    
+    // 返回包含三个引用的对象
+    return { bubble, detail, detailContainer };
+}
+
+/**
+ * 切换思考过程详情显示（适配独立布局）
+ */
+function toggleThinkingDetail(detailContainer, expandIcon) {
+    if (detailContainer.style.display === 'none') {
+        detailContainer.style.display = 'block';
+        expandIcon.textContent = '▼';
+        // 滚动到底部以确保详情面板可见
+        setTimeout(() => {
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }, 100);
+    } else {
+        detailContainer.style.display = 'none';
+        expandIcon.textContent = '▶';
+    }
+}
+
+
+
+/**
+ * 处理流式事件
+ */
+function handleStreamEvent(eventData, thinkingElements) {
+    const eventType = eventData.type;
+    
+    console.log('[SSE Event]:', eventType, eventData);
+    
+    switch (eventType) {
+        case 'node_start':
+            handleNodeStart(eventData, thinkingElements);
+            break;
+            
+        case 'node_end':
+            handleNodeEnd(eventData, thinkingElements);
+            break;
+            
+        case 'final_result':
+            handleFinalResult(eventData, thinkingElements);
+            break;
+            
+        case 'interrupt':
+            handleInterrupt(eventData, thinkingElements);
+            break;
+            
+        case 'error':
+            handleStreamError(eventData, thinkingElements);
+            break;
+            
+        default:
+            console.warn('未知的事件类型:', eventType);
+    }
+}
+
+/**
+ * 处理节点开始事件
+ */
+function handleNodeStart(eventData, thinkingElements) {
+    const { node_name, node_desc } = eventData;
+    
+    // 更新简洁视图的文字（在 bubble 中）
+    const thinkingText = thinkingElements.bubble.querySelector('.thinking-text');
+    if (thinkingText) {
+        thinkingText.textContent = `正在${node_desc}，请稍等...`;
+    }
+    
+    // 在独立的详情面板中添加步骤项
+    const detail = thinkingElements.detail;
+    const stepItem = document.createElement('div');
+    stepItem.className = 'step-item in-progress';
+    stepItem.id = `step-${node_name}`;
+    
+    const statusIcon = document.createElement('span');
+    statusIcon.className = 'step-status';
+    statusIcon.textContent = '▶';
+    
+    const stepName = document.createElement('span');
+    stepName.className = 'step-name';
+    stepName.textContent = node_desc;
+    
+    const stepTime = document.createElement('span');
+    stepTime.className = 'step-time';
+    stepTime.textContent = '进行中...';
+    
+    stepItem.appendChild(statusIcon);
+    stepItem.appendChild(stepName);
+    stepItem.appendChild(stepTime);
+    
+    detail.appendChild(stepItem);
+    
+    // 滚动到底部
+    chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+/**
+ * 处理节点结束事件
+ */
+function handleNodeEnd(eventData, thinkingElements) {
+    const { node_name, duration } = eventData;
+    
+    // 在独立的详情面板中查找并更新步骤项
+    const stepItem = thinkingElements.detail.querySelector(`#step-${node_name}`);
+    if (stepItem) {
+        stepItem.className = 'step-item completed';
+        
+        const statusIcon = stepItem.querySelector('.step-status');
+        if (statusIcon) {
+            statusIcon.textContent = '✓';
+        }
+        
+        const stepTime = stepItem.querySelector('.step-time');
+        if (stepTime) {
+            stepTime.textContent = `${duration}s`;
+        }
+    }
+}
+
+/**
+ * 处理最终结果事件
+ */
+function handleFinalResult(eventData, thinkingElements) {
+    const { data } = eventData;
+    
+    // 移除思考过程的两个独立元素
+    if (thinkingElements.bubble && thinkingElements.bubble.parentNode) {
+        thinkingElements.bubble.parentNode.removeChild(thinkingElements.bubble);
+    }
+    if (thinkingElements.detailContainer && thinkingElements.detailContainer.parentNode) {
+        thinkingElements.detailContainer.parentNode.removeChild(thinkingElements.detailContainer);
+    }
+    
+    // 添加最终回复
+    addMessage('ai', data);
+}
+
+/**
+ * 处理interrupt事件
+ */
+function handleInterrupt(eventData, thinkingElements) {
+    const { message } = eventData;
+    
+    // 移除思考过程的两个独立元素
+    if (thinkingElements.bubble && thinkingElements.bubble.parentNode) {
+        thinkingElements.bubble.parentNode.removeChild(thinkingElements.bubble);
+    }
+    if (thinkingElements.detailContainer && thinkingElements.detailContainer.parentNode) {
+        thinkingElements.detailContainer.parentNode.removeChild(thinkingElements.detailContainer);
+    }
+    
+    // 添加需要用户输入的消息
+    addMessage('ai', {
+        type: 'human_input_required',
+        summary: message
+    });
+}
+
+/**
+ * 处理流式传输错误
+ */
+function handleStreamError(eventData, thinkingElements) {
+    const { message } = eventData;
+    
+    // 移除思考过程的两个独立元素
+    if (thinkingElements.bubble && thinkingElements.bubble.parentNode) {
+        thinkingElements.bubble.parentNode.removeChild(thinkingElements.bubble);
+    }
+    if (thinkingElements.detailContainer && thinkingElements.detailContainer.parentNode) {
+        thinkingElements.detailContainer.parentNode.removeChild(thinkingElements.detailContainer);
+    }
+    
+    // 显示错误消息
+    addMessage('ai', {
+        type: 'text',
+        summary: `错误：${message}`
+    });
+}
+
 
 // 显示错误
 function showError(msg) {
