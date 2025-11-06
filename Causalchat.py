@@ -195,8 +195,6 @@ def find_user(username):
         with get_db_connection() as conn:
             # 使用 dictionary=True 使 cursor 返回字典而不是元组，方便按列名访问
             cursor = conn.cursor(dictionary=True)
-            # MySQL 使用 %s 作为占位符
-            # 这里的数据库语法是说：%s是占位符，username是变量，可以防止恶意注入
             cursor.execute("SELECT id, username, password_hash FROM users WHERE username = %s", (username,))
             user_row = cursor.fetchone()
             # cursor.close() # 'with' 语句会自动关闭游标和连接
@@ -462,9 +460,9 @@ def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Eve
 
 
 # 获取发送的各种值
+# 暂时闲置，未来可能使用
 @app.route('/api/send', methods=['POST'])
 def handle_message():
-    # --- 从 Session 获取用户身份 ---
     from flask import session
     if 'user_id' not in session or 'username' not in session:
         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
@@ -495,7 +493,109 @@ def handle_message():
         logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}", exc_info=True)
         return jsonify({'success': False, 'error': f'处理消息时出错: {e}'}), 500
 
+@app.route('/api/send_stream', methods=['POST'])
+def handle_message_stream():
+    """
+    SSE流式端点：实时推送agent节点执行事件
+    """
+    from flask import session, stream_with_context, Response
+    
+    # 认证检查
+    if 'user_id' not in session or 'username' not in session:
+        return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
+    
+    user_id = session['user_id']
+    username = session['username']
+    
+    # 获取请求参数
+    data = request.json
+    user_input = data.get('message', '')
+    session_id = data.get('session_id')
+    
+    if not session_id:
+        logging.error(f"用户 {username} (ID: {user_id}) 发送流式消息时缺少 session_id")
+        return jsonify({'success': False, 'error': '请求无效，缺少会话ID'}), 400
+    
+    logging.info(f"[流式] 用户 {username} (ID: {user_id}) 在会话 {session_id} 中发送消息: {user_input[:50]}...")
+    
+    def generate():
+        """
+        生成器函数，用于SSE流式传输
+        """
+        try:
+            # 在后台事件循环中运行异步生成器
+            loop = background_loop
+            queue = asyncio.Queue()
+            
+            async def producer():
+                try:
+                    async for event_data in ai_call_stream(user_input, user_id, username, session_id):
+                        # 放入队列
+                        await queue.put(event_data)
+                except Exception as e:
+                    logging.error(f"[SSE] 生成器错误: {e}", exc_info=True)
+                    error_event = f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                    await queue.put(error_event)
+                finally:
+                    await queue.put(None)  # 结束标记
+            
+            # 启动生产者
+            future = asyncio.run_coroutine_threadsafe(producer(), loop)
+            
+            # 从队列中读取并yield
+            while True:
+                # 使用 run_coroutine_threadsafe 获取队列中的数据
+                get_future = asyncio.run_coroutine_threadsafe(queue.get(), loop)
+                event_data = get_future.result(timeout=300)  # 5分钟超时
+                
+                if event_data is None:  # 结束标记
+                    break
+                    
+                yield event_data
+                
+                # 如果是final_result或interrupt，保存聊天记录
+                try:
+                    if event_data.startswith("data: "):
+                        event_json = json.loads(event_data[6:])  # 去掉 "data: " 前缀
+                        
+                        if event_json.get("type") == "final_result":
+                            # 保存聊天记录
+                            response_data = event_json.get("data", {})
+                            save_chat(user_id, session_id, user_input, response_data)
+                            logging.info(f"[SSE] 已保存聊天记录到数据库")
+                        
+                        elif event_json.get("type") == "interrupt":
+                            # interrupt场景也保存
+                            response_data = {
+                                "type": "human_input_required",
+                                "summary": event_json.get("message", "")
+                            }
+                            save_chat(user_id, session_id, user_input, response_data)
+                            logging.info(f"[SSE] 已保存interrupt聊天记录")
+                except Exception as e:
+                    logging.warning(f"[SSE] 保存聊天记录时出错: {e}")
+            
+            # 等待生产者完成
+            future.result(timeout=5)
+            
+        except Exception as e:
+            logging.error(f"[SSE] 流式传输错误: {e}", exc_info=True)
+            error_event = f"data: {json.dumps({'type': 'error', 'message': f'流式传输错误: {str(e)}'}, ensure_ascii=False)}\n\n"
+            yield error_event
+    
+    # 返回SSE响应
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
+
 @app.route('/api/new_chat',methods=['POST'])
+
 def new_chat():
     from flask import session
     if 'user_id' not in session:
@@ -505,7 +605,7 @@ def new_chat():
     username = session.get('username', '未知用户')
     new_session_id = str(uuid.uuid4())
 
-    # --- 核心修改：不再立即创建数据库记录，只生成session_id ---
+    # 核心修改：不再立即创建数据库记录，只生成session_id
     # 会话记录将在用户发送第一条消息时通过 save_chat() 函数创建
     logging.info(f"用户 {username} (ID: {user_id}) 生成新会话ID: {new_session_id} (延迟创建)")
     return jsonify({'success': True, 'new_session_id': new_session_id})
@@ -516,7 +616,6 @@ def initialize_rag_system():
     global rag_chain, llm
     logging.info("正在初始化 RAG 知识库系统...")
     try:
-        # --- 路径定义 ---
         knowledge_base_dir = os.path.join(BASE_DIR, "knowledge_base")
         model_path = os.path.join(knowledge_base_dir, "models", "bge-small-zh-v1.5")
         persist_directory = os.path.join(knowledge_base_dir, "db")
@@ -526,7 +625,7 @@ def initialize_rag_system():
             logging.error(error_msg)
             raise FileNotFoundError(error_msg)
 
-        # --- 初始化组件 ---
+        #  初始化组件 
         logging.info("正在加载 RAG 的 Embedding 模型...")
         model_kwargs = {'device': 'cpu'}
         encode_kwargs = {'normalize_embeddings': True}
@@ -543,7 +642,7 @@ def initialize_rag_system():
         )
         retriever = db.as_retriever(search_kwargs={"k": 3})
 
-        # --- 构建RAG链 ---
+        #  构建RAG链 
         template = (
             "请只根据以下提供的上下文信息来回答问题。\n"
             "如果根据上下文信息无法回答问题，请直接说\"根据提供的知识库，我无法回答该问题\"，不要自行编造答案。\n\n"
@@ -569,7 +668,7 @@ def initialize_rag_system():
 
 
 
-# --- LangChain Agent 的 MCP 工具封装 ---
+#  LangChain Agent 的 MCP 工具封装 
 # 这里是对mcp格式的langchain翻译，翻译成一个类
 # 目前的逻辑下，并没有使用该方法
 def create_pydantic(schema: dict, model_name: str) -> Type[BaseModel]:
@@ -668,20 +767,27 @@ class KnowledgeBaseTool(BaseTool):
             return f"查询知识库时出错: {e}"
 
 
-
-
 from causal_agent.graph import create_graph
 from causal_agent.state import CausalChatState
 from langgraph.types import Command  # 用于恢复 interrupt() 暂停的图
 
 
 
-interrupted_sessions = {}
+NODE_DESCRIPTIONS = {
+    "agent": "路由决策 - 分析用户意图",
+    "fold": "加载文件 - 读取并验证数据",
+    "preprocess": "数据预处理 - 生成统计摘要和可视化",
+    "execute_tools": "执行分析 - 运行因果分析和知识库查询",
+    "postprocess": "后处理 - 环路检测和边评估",
+    "report": "生成报告 - 整合分析结果",
+    "normal_chat": "普通对话",
+    "inquiry_answer": "基于报告回答问题"
+}
 
 async def ai_call(text, user_id, username, session_id):
     """
     使用我们模块化的 LangGraph agent 来处理用户请求。
-    支持中断和恢复机制。
+    支持中断和恢复机制（基于checkpointer，无需全局状态）。
     """
     logging.info(f"处理用户 {username} 的消息，会话ID: {session_id}")
     
@@ -693,21 +799,28 @@ async def ai_call(text, user_id, username, session_id):
         }
     }
     
-    # --- 检查是否是恢复中断的会话 ---
-    if session_id in interrupted_sessions:
-        logging.info(f"检测到会话 {session_id} 正在恢复中断...")
+    # 检查当前状态，判断是否是恢复中断的会话
+    # LangGraph会通过checkpointer自动检测interrupt状态
+    try:
+        state = await agent_graph.aget_state(config)
+        # 如果next为空且tasks不为空，说明有pending interrupt
+        is_interrupted = state.next == () and state.tasks
         
-        # 使用 Command(resume=...) 恢复执行，传入用户输入
-        input_data = Command(resume=text)
-        
-        # 清除中断标记
-        del interrupted_sessions[session_id]
-        
-    else:
-
-        logging.info(f"正常对话或第一次对话")
-        
-        # 构建输入（只需要新消息，历史由 Checkpointer 管理）
+        if is_interrupted:
+            logging.info(f"检测到会话 {session_id} 处于中断状态，使用Command(resume=...)恢复")
+            # 使用 Command(resume=...) 恢复执行，传入用户输入
+            input_data = Command(resume=text)
+        else:
+            logging.info(f"正常对话或第一次对话")
+            # 构建输入（只需要新消息，历史由 Checkpointer 管理）
+            input_data = {
+                "messages": [HumanMessage(content=text)],
+                "user_id": user_id,
+                "username": username,
+                "session_id": session_id
+            }
+    except Exception as e:
+        logging.warning(f"无法获取状态，假设为新对话: {e}")
         input_data = {
             "messages": [HumanMessage(content=text)],
             "user_id": user_id,
@@ -721,33 +834,29 @@ async def ai_call(text, user_id, username, session_id):
         interrupt_info = None
         
         # 使用 astream 流式执行，可以捕获 interrupt 事件
-        async for event in agent_graph.astream(input_data, config):
+        async for event in agent_graph.astream(input_data, config, stream_mode="values"):
             logging.info(f"收到事件: {list(event.keys())}")
             
             # 检查是否遇到 interrupt
             if "__interrupt__" in event:
                 interrupt_info = event["__interrupt__"]
                 logging.info(f"检测到 interrupt: {interrupt_info}")
+                final_state_data = event  # 保存包含interrupt的状态
                 break
             
             # 收集正常的状态更新
             if isinstance(event, dict) and event:
-                # 获取事件的值（节点更新）
-                for node_name, node_output in event.items():
-                    if isinstance(node_output, dict) and "messages" in node_output:
-                        final_state_data = node_output
+                final_state_data = event
         
         if interrupt_info:
             # 提取 interrupt 传递的问题
-            # interrupt_info 是一个元组，第一个元素是 Interrupt 对象
+            # interrupt_info 是一个列表，包含Interrupt对象
             interrupt_obj = interrupt_info[0] if isinstance(interrupt_info, (list, tuple)) else interrupt_info
             
             # Interrupt 对象有 value 属性，包含实际的问题文本
             question = interrupt_obj.value if hasattr(interrupt_obj, 'value') else str(interrupt_obj)
             
-            # 标记会话为中断状态
-            interrupted_sessions[session_id] = True
-            
+            # 注意：不需要全局状态，checkpointer会自动管理
             logging.info(f"图已暂停，等待用户输入。问题: {question}")
             return {
                 "type": "human_input_required",
@@ -764,6 +873,146 @@ async def ai_call(text, user_id, username, session_id):
     except Exception as e:
         logging.error(f"执行 LangGraph Agent 时发生错误: {e}", exc_info=True)
         return {"type": "text", "summary": f"处理请求时出现错误: {e}"}
+
+async def ai_call_stream(text, user_id, username, session_id):
+    """
+    流式版本的 ai_call，使用 astream() 捕获节点执行更新。
+    这是一个生成器函数，会yield SSE格式的事件数据。
+    """
+    logging.info(f"[流式] 处理用户 {username} 的消息，会话ID: {session_id}")
+    
+    # 配置：使用 session_id 作为 thread_id
+    config = {
+        "configurable": {
+            "thread_id": session_id,
+            "user_id": user_id
+        }
+    }
+    
+    # 检查当前状态，判断是否是恢复中断的会话
+    try:
+        state = await agent_graph.aget_state(config)
+        ## 检查是否中断
+        is_interrupted = state.next == () and state.tasks
+        
+        if is_interrupted:
+            logging.info(f"[流式] 检测到会话 {session_id} 处于中断状态，使用Command(resume=...)恢复")
+            input_data = Command(resume=text)
+        else:
+            logging.info(f"[流式] 正常对话或第一次对话")
+            input_data = {
+                "messages": [HumanMessage(content=text)],
+                "user_id": user_id,
+                "username": username,
+                "session_id": session_id
+            }
+    except Exception as e:
+        logging.warning(f"[流式] 无法获取状态，假设为新对话: {e}")
+        input_data = {
+            "messages": [HumanMessage(content=text)],
+            "user_id": user_id,
+            "username": username,
+            "session_id": session_id
+        }
+    
+    import time
+    node_start_times = {}
+    final_state_data = None
+    interrupt_info = None
+    last_node = None
+    
+    try:
+        # 使用 astream 流式执行，捕获节点更新
+        # stream_mode="updates" 会在每个节点执行后返回更新
+        async for chunk in agent_graph.astream(input_data, config, stream_mode="updates"):
+            logging.info(f"[SSE] 收到更新: {list(chunk.keys())}")
+            
+            # chunk的格式: {node_name: node_output}
+            for node_name, node_output in chunk.items():
+                if node_name in NODE_DESCRIPTIONS:
+
+                    # 如果有上一个节点，且当前节点与上一个不同，先发送上一个节点的结束事件
+                    if last_node and last_node != node_name and last_node in node_start_times:
+                        start_time = node_start_times[last_node]
+                        duration = round(time.time() - start_time, 2)
+                        
+                        event_data = {
+                            "type": "node_end",
+                            "node_name": last_node,
+                            "duration": duration,
+                            "timestamp": time.time()
+                        }
+                        yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                        logging.info(f"[SSE] 节点完成: {last_node} (耗时: {duration}s)")
+                    
+                    # 发送当前节点的开始事件
+                    if last_node != node_name:
+                        node_start_times[node_name] = time.time()
+                        
+                        event_data = {
+                            "type": "node_start",
+                            "node_name": node_name,
+                            "node_desc": NODE_DESCRIPTIONS[node_name],
+                            "timestamp": time.time()
+                        }
+                        yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                        logging.info(f"[SSE] 节点开始: {node_name}")
+                        
+                        last_node = node_name
+                
+                # 保存节点输出
+                if isinstance(node_output, dict):
+                    final_state_data = node_output
+        
+        # === 流结束后，发送最后一个节点的结束事件 ===
+        if last_node and last_node in node_start_times:
+            start_time = node_start_times[last_node]
+            duration = round(time.time() - start_time, 2)
+            
+            event_data = {
+                "type": "node_end",
+                "node_name": last_node,
+                "duration": duration,
+                "timestamp": time.time()
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            logging.info(f"[SSE] 节点完成: {last_node} (耗时: {duration}s)")
+        
+        # 获取最终状态以检查interrupt
+        state = await agent_graph.aget_state(config)
+        final_state_data = state.values
+        
+        # 检查是否有interrupt
+        if "__interrupt__" in final_state_data:
+            interrupt_info = final_state_data["__interrupt__"]
+            
+            # 提取问题文本
+            interrupt_obj = interrupt_info[0] if isinstance(interrupt_info, (list, tuple)) else interrupt_info
+            question = interrupt_obj.value if hasattr(interrupt_obj, 'value') else str(interrupt_obj)
+            
+            event_data = {
+                "type": "interrupt",
+                "message": question
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            logging.info(f"[SSE] 图已暂停，等待用户输入")
+        else:
+            # 发送最终结果
+            result = process_final_result(final_state_data)
+            event_data = {
+                "type": "final_result",
+                "data": result
+            }
+            yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            logging.info(f"[SSE] 发送最终结果")
+            
+    except Exception as e:
+        logging.error(f"[流式] 执行 LangGraph Agent 时发生错误: {e}", exc_info=True)
+        error_data = {
+            "type": "error",
+            "message": f"处理请求时出现错误: {str(e)}"
+        }
+        yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
 
 def process_final_result(final_state_data):
     """
