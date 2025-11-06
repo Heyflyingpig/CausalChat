@@ -41,6 +41,7 @@ test_*.py
 *.md
 *.txt
 !requirements.txt
+!requirements-base.txt
 
 # 原因：
 # - 测试文件运行时不需要
