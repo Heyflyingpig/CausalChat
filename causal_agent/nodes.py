@@ -47,7 +47,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     Agent节点，是图的起点，用于判断是否需要进入causal循环，
     根据当前状态强制LLM做出三选一的决策，然后将该决策转化为消息。
     """
-    logging.info("--- 步骤: Agent 节点 (LLM 决策) ---")
+    logging.info(" 步骤: Agent 节点 (LLM 决策) ")
 
     # 检查生成报告所需的结果是否已存在。
     has_tool_results = state.get('causal_analysis_result') is not None
@@ -155,7 +155,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     4.  调用 validate_analysis 进行严格的条件验证。
     5.  根据验证结果，决策进入 'preprocess' 节点或 'ask_human' 节点。
     """
-    logging.info("--- 步骤: 文件加载、解析与验证节点 ---")
+    logging.info(" 步骤: 文件加载、解析与验证节点 ")
     user_id = state.get("user_id")
 
     # 1. 使用LLM一次性提取文件名和分析意图
@@ -337,7 +337,7 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     3.  调用 LLM 对数据摘要进行自然语言总结。
     4.  将图表和总结存入状态，然后直接进入下一步。
     """
-    logging.info("--- 步骤: 数据预处理与分析节点 ---")
+    logging.info(" 步骤: 数据预处理与分析节点 ")
 
     # 从 file_content 动态生成 DataFrame
     file_content = state.get("file_content")
@@ -432,13 +432,13 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     输出：因果分析结果和知识库查询结果
     """
     
-    logging.info("--- 步骤: 执行工具节点 ---")
+    logging.info(" 步骤: 执行工具节点 ")
     
     ## 获取编码的文件信息
     file_content = state.get("file_content")
 
     # 并行执行任务并等待结果 
-    logging.info("--- 开始并行执行因果分析和RAG查询 ---")
+    logging.info(" 开始并行执行因果分析和RAG查询 ")
 
     rag_question_task = get_rag_questions(state, llm, num_questions=2)
     
@@ -452,7 +452,7 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
 
     rag_task_result = rag_task.result()
     
-    logging.info("--- 因果分析和RAG查询均已完成 ---")
+    logging.info(" 因果分析和RAG查询均已完成 ")
     
     state["causal_analysis_result"] = causal_task_result
     state["knowledge_base_result"] = rag_task_result
@@ -493,7 +493,6 @@ from Postprocessing.cycles_check.detect_cycles import detect_cycles
 from Postprocessing.cycles_check.extract_causal_return import extract_adjacency_matrix
 from Postprocessing.cycles_check.fix_cycles import fix_cycles_with_llm
 
-
 # 边评估模块
 from Postprocessing.evaluate_edge.evaluate_edge_llm import evaluate_edges_with_llm
 
@@ -510,7 +509,7 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         - 使用LLM进行环路修正和边评估决策
         - 所有修正操作都会被详细记录
     """
-    logging.info("--- 步骤: 后处理节点 ---")
+    logging.info(" 步骤: 后处理节点 ")
     
     try:
         # 提取原始因果图
@@ -621,7 +620,7 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     主要是对所有的参数生成一份报告
     
     """
-    logging.info("--- 步骤: 报告模块 ---")
+    logging.info(" 步骤: 报告模块 ")
     # 分离 system prompt 和 messages placeholder
     system_prompt_template = (
         """
@@ -679,7 +678,7 @@ def normal_chat_node(state: CausalChatState,llm: ChatOpenAI) -> dict:
     Represents "正常问答".
     This is for when the agent determines it's a simple chat conversation.
     """
-    logging.info("--- 步骤: 普通问答节点 ---")
+    logging.info(" 步骤: 普通问答节点 ")
     
     prompt_template = (
         """
@@ -705,7 +704,7 @@ def inquiry_answer_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
     根据报告追问用户的问题
     """
-    logging.info("--- 步骤: 根据报告回答用户的问题节点 ---")
+    logging.info(" 步骤: 根据报告回答用户的问题节点 ")
     prompt_template = (
         """
         system role: {system_role}

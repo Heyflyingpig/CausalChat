@@ -42,7 +42,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 # 这行代码必须在任何 asyncio 操作（尤其是创建事件循环）之前执行。
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-# ---------------------------------------------
+
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -52,20 +52,17 @@ logging.getLogger().setLevel(logging.INFO)
 
 
 app = Flask(__name__, static_folder='static')
-# --- 为 Flask Sessions 设置密钥 ---
+#  为 Flask Sessions 设置密钥 
 # 会话管理（例如登录状态）需要一个密钥来对 cookie 进行加密签名。
 # 这是支持多用户并发会话的基础。
 # 我们将从新的配置模块中加载它。
 app.secret_key = settings.SECRET_KEY
-# ------------------------------------
 
 BASE_DIR = os.path.dirname(__file__)
 #这里是创建文件makedirs，后面的参数意思是确定文件目录存在
 os.makedirs(os.path.join(BASE_DIR, 'static', 'generated_graphs'), exist_ok=True)
-# -----------------------------
 SETTING_DIR = os.path.join(BASE_DIR, "setting")
 
-# --- 修改：全局状态管理 ---
 # 将 MCP 和事件循环,llm和rag链的相关的状态集中管理
 
 mcp_session: ClientSession | None = None
@@ -75,7 +72,6 @@ background_loop: asyncio.AbstractEventLoop | None = None
 rag_chain = None
 llm = None
 agent_graph = None
-# -------------------------
 
 
 def initialize_llm():
@@ -95,7 +91,7 @@ def initialize_llm():
         streaming=False,
     )
     logging.info("LLM 实例初始化成功。")
-    # --- Agent Graph 的创建将推迟到 MCP 连接就绪后 ---
+    #  Agent Graph 的创建将推迟到 MCP 连接就绪后 
     return True
 
 
@@ -171,7 +167,7 @@ def check_database_readiness():
         logging.error(f"数据库就绪性检查过程中发生未知错误: {e}")
         raise
 
-# --- 修改：在应用启动时进行数据库就绪性检查而不是初始化 ---
+# 在应用启动时进行数据库就绪性检查而不是初始化 
 try:
     check_database_readiness()
 except RuntimeError as e:
@@ -330,7 +326,7 @@ def handle_login():
     处理用户登录请求。
     接收前端通过HTTPS发送的明文密码，使用bcrypt进行验证。
     """
-    # --- 重构：使用 Flask Session 进行会话管理 ---
+    #  重构：使用 Flask Session 进行会话管理 
     from flask import session
 
     data = request.json
@@ -351,7 +347,7 @@ def handle_login():
     if bcrypt.checkpw(plain_password.encode('utf-8'), stored_hashed_password):
         logging.info(f"用户登录成功: {username}")
         
-        # --- 核心修改：在 Session 中存储用户信息 ---
+        #  核心修改：在 Session 中存储用户信息 
         session.clear() # 先清除旧的会话数据
         session['user_id'] = user_data['id']
         session['username'] = user_data['username']
@@ -365,24 +361,24 @@ def handle_login():
 # 登出
 @app.route('/api/logout', methods=['POST'])
 def handle_logout():
-    # --- 重构：使用 Flask Session ---
+    #  重构：使用 Flask Session 
     from flask import session
     
     # 从会话中获取用户名用于日志记录
     username = session.get('username', '未知用户')
     logging.info(f"用户 {username} 请求退出登录")
 
-    # --- 核心修改：清除会话 ---
+    #  核心修改：清除会话 
     session.clear()
-    # -------------------------
+    # -
 
     return jsonify({'success': True})
 
-# --- 检查认证状态 API 端点 ---
+#  检查认证状态 API 端点 
 @app.route('/api/check_auth', methods=['GET'])
 def check_auth():
     """检查当前后端记录的登录状态"""
-    # --- 重构：检查 Flask Session ---
+    #  重构：检查 Flask Session 
     from flask import session
     if 'user_id' in session and 'username' in session:
         username = session['username']
@@ -469,11 +465,11 @@ def handle_message():
     
     user_id = session['user_id']
     username = session['username']
-    # -----------------------------------
+    # --
 
     data = request.json
     user_input = data.get('message', '')
-    session_id = data.get('session_id') # <--- 从前端获取会话ID
+    session_id = data.get('session_id') # < 从前端获取会话ID
 
     if not session_id:
         logging.error(f"用户 {username} (ID: {user_id}) 发送消息时缺少 session_id")
@@ -486,7 +482,7 @@ def handle_message():
         future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username, session_id), background_loop)
         response = future.result()  # 这会阻塞当前线程直到异步任务完成
 
-        # --- 核心修改：显式传递 session_id，不再使用全局变量 ---
+        #  核心修改：显式传递 session_id，不再使用全局变量 
         save_chat(user_id, session_id, user_input, response)
         return jsonify({'success': True, 'response': response})
     except Exception as e:
@@ -1089,7 +1085,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
         with get_db_connection() as conn:
             cursor = conn.cursor(dictionary=True)
 
-            # --- 核心修改：实现延迟session创建逻辑 ---
+            #  核心修改：实现延迟session创建逻辑 
             # 0. 检查session是否存在，如果不存在则创建
             cursor.execute("SELECT message_count, title FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
             session_data = cursor.fetchone()
@@ -1106,7 +1102,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
             else:
                 # Session已存在，判断是否为第一条消息
                 is_first_message = session_data['message_count'] == 0
-            # ------------------------------------------
+            # 
             
             # 1. 保存用户消息
             sql_user = """
@@ -1283,7 +1279,7 @@ def load_session_content():
         with get_db_connection() as conn:
             cursor = conn.cursor(dictionary=True)
             
-            # --- 核心修改：处理延迟创建的session ---
+            #  核心修改：处理延迟创建的session 
             # 首先检查session是否存在
             cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
             session_exists = cursor.fetchone()
@@ -1292,7 +1288,7 @@ def load_session_content():
                 # Session还不存在（用户还没发送第一条消息），返回空消息列表
                 logging.info(f"会话 {session_id} 尚未创建（延迟创建模式），返回空消息列表")
                 return jsonify({"success": True, "messages": []})
-            # --------------------------------------------
+            # --
 
             # 获取所有消息，并左连接附件表
             # 这里的 cm 是 chat_messages 表的别名,ca 是 chat_attachments 表的别名
@@ -1335,14 +1331,14 @@ def load_session_content():
  
 @app.route('/api/change_session', methods=['POST'])
 def change_session():
-    # --- 用户认证检查 ---
+    #  用户认证检查 
     from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
     user_id = session['user_id']
     
-    # --- 修改：从 POST 请求的 JSON body 中获取数据 ---
+    #  修改：从 POST 请求的 JSON body 中获取数据 
     data = request.json
     title = data.get('title')
     session_id = data.get('session_id')
@@ -1352,7 +1348,7 @@ def change_session():
 
     try:
         with get_db_connection() as conn:
-            # --- 修改：增加 user_id 条件以确保安全，并处理延迟创建的session ---
+            #  修改：增加 user_id 条件以确保安全，并处理延迟创建的session 
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE sessions SET title = %s WHERE id = %s AND user_id = %s",
@@ -1360,7 +1356,7 @@ def change_session():
             )
             conn.commit()
             
-            # --- 修改：更详细的错误处理，区分延迟创建的session ---
+            #  修改：更详细的错误处理，区分延迟创建的session 
             if cursor.rowcount == 0:
                 # 检查session是否因为延迟创建而不存在
                 cursor.execute("SELECT 1 FROM chat_messages WHERE session_id = %s AND user_id = %s LIMIT 1", (session_id, user_id))
@@ -1383,7 +1379,7 @@ def change_session():
 
 @app.route('/api/delete_session', methods=['POST'])
 def delete_session():
-    # --- 核心修改：安全和完整的删除逻辑，支持延迟创建 ---
+    #  核心修改：安全和完整的删除逻辑，支持延迟创建 
     from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
@@ -1402,7 +1398,7 @@ def delete_session():
             # 开启事务
             conn.start_transaction()
             
-            # --- 修改：处理延迟创建的session ---
+            #  修改：处理延迟创建的session 
             # 0. 检查session是否存在
             cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
             session_exists = cursor.fetchone()
@@ -1420,7 +1416,7 @@ def delete_session():
                 else:
                     # 有消息但session记录不存在，清理孤立的消息
                     logging.warning(f"发现用户 {user_id} 的会话 {session_id} 有孤立消息，正在清理")
-            # ------------------------------------------
+            # 
 
             # 1. 删除与该会话相关的附件 (通过连接 chat_messages)
             # 这是为了处理 chat_attachments 和 chat_messages 之间没有直接外键的情况
@@ -1517,7 +1513,7 @@ def setting():
 ## 上传文件
 @app.route('/api/upload_file', methods=['POST'])
 def upload_file():
-    # --- 重构：从 Session 获取用户身份 ---
+    #  重构：从 Session 获取用户身份 
     from flask import session
     if 'user_id' not in session:
         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
@@ -1529,7 +1525,7 @@ def upload_file():
     if not session_id:
         logging.warning(f"用户 {username} 上传文件请求缺少 session_id")
         return jsonify({'success': False, 'error': '请求无效，缺少会话ID'}), 400
-    # ------------------------------------
+    # 
 
     if 'file' not in request.files:
         logging.warning(f"用户 {username} 上传CSV请求中没有文件部分")
@@ -1662,7 +1658,7 @@ if __name__ == '__main__':
     
     agent_graph = create_graph(llm, mcp_session)
     logging.info("Agent Graph 创建成功。")
-    # -------------------------------------------------------------------- 
+    # -- 
     logging.info("MCP 连接就绪，启动 Flask 应用服务器...")
     # 启动 Flask 应用
     # use_reloader=False 是必须的，因为重载器会启动一个子进程，

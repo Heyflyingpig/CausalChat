@@ -1,4 +1,4 @@
-// --- 认证相关变量和函数 ---
+//  认证相关变量和函数 
 const authOverlay = document.getElementById('authOverlay');
 const loginForm = document.getElementById('loginForm');
 const registerForm = document.getElementById('registerForm');
@@ -16,10 +16,10 @@ const backToSettingsButton = document.getElementById('backToSettingsButton'); //
 const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上传器
 const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上传按钮
 const chatArea = document.getElementById('chatArea');
-//全局变量存储当前会话的用户名 ---
+//全局变量存储当前会话的用户名 
 let currentUsername = null;
-let currentSessionId = null; // <--- 全局变量跟踪当前会话ID
-let isNewSessionPendingDisplay = false; // --- 用于跟踪新会话是否已在UI中临时显示
+let currentSessionId = null; // < 全局变量跟踪当前会话ID
+let isNewSessionPendingDisplay = false; //  用于跟踪新会话是否已在UI中临时显示
 let chatEventListenersAttached = false; // 跟踪事件监听器是否已附加
 
 // 切换登录和注册表单
@@ -114,9 +114,9 @@ async function handleLogin() {
             setupChatEventListeners();
 
             updateUserInfo(); // 更新用户信息显示
-            loadHistory(); // --- 先加载历史记录
-            loadFiles(); // ---  加载文件列表 ---
-            newChat(); // --- 然后准备一个新对话界面
+            loadHistory(); //  先加载历史记录
+            loadFiles(); //   加载文件列表 
+            newChat(); //  然后准备一个新对话界面
              // 清空登录表单
             usernameInput.value = '';
             passwordInput.value = '';
@@ -145,7 +145,7 @@ async function handleLogout() {
         if (data.success) {
             console.log("后端登出成功");
             currentUsername = null; // **修改**: 清除全局变量
-            chatEventListenersAttached = false; // --- 重置监听器标志 ---
+            chatEventListenersAttached = false; //  重置监听器标志 
             document.body.classList.remove('logged-in'); // 移除标记类
             authOverlay.classList.add('active'); // 显示登录/注册层
             loginForm.style.display = 'block'; // 确保显示的是登录表单
@@ -153,7 +153,7 @@ async function handleLogout() {
             closeUserInfoPopup(); // 关闭用户信息弹窗
             document.getElementById('chatArea').innerHTML = ''; // 清空聊天区域
             historyList.innerHTML = ''; // 清空历史列表
-            fileList.innerHTML = ''; // --- 新增: 清空文件列表 ---
+            fileList.innerHTML = ''; //  新增: 清空文件列表 
             updateUserInfo(); // 清空头像等信息
             console.log("用户已退出登录，UI已更新");
         } else {
@@ -183,7 +183,7 @@ async function checkLoginStatus() {
 
             updateUserInfo(); // 更新用户信息显示 (稍后修改此函数)
             loadHistory(); // 加载历史记录 (稍后修改此函数)
-            loadFiles(); // --- 新增: 加载文件列表 ---
+            loadFiles(); // 加载文件列表 
         } else {
             console.log("后端验证：用户未登录，显示登录界面");
             currentUsername = null; // **修改**: 确保全局变量为空
@@ -192,7 +192,7 @@ async function checkLoginStatus() {
             loginForm.style.display = 'block';
             registerForm.style.display = 'none';
             historyList.innerHTML = ''; // 清空可能存在的旧历史记录
-            fileList.innerHTML = ''; // --- 新增: 清空文件列表 ---
+            fileList.innerHTML = ''; // 清空文件列表 
             updateUserInfo(); // 清空头像等 (稍后修改此函数)
         }
     } catch (error) {
@@ -326,7 +326,7 @@ function setupGlobalEventListeners() {
 }
 
 function setupChatEventListeners() {
-    // --- 防止重复绑定 ---
+    //  防止重复绑定 
     if (chatEventListenersAttached) {
         return;
     }
@@ -358,7 +358,7 @@ function setupChatEventListeners() {
     if (userAvatar) userAvatar.addEventListener('click', showUserInfoPopup);
     if (uploadCsvButton) uploadCsvButton.addEventListener('click', triggerCsvUpload);
 
-    chatEventListenersAttached = true; // --- 设置标志 ---
+    chatEventListenersAttached = true; //  设置标志 
 }
 
 // 返回设置列表
@@ -399,7 +399,7 @@ async function sendMessage() {
         return;
     }
 
-    // --- 核心修改：如果会话ID不存在，则先在后端获取一个 ---
+    //  核心修改：如果会话ID不存在，则先在后端获取一个 
     if (!currentSessionId) {
         console.log("检测到新对话（无会话ID），正在后端获取ID...");
         try {
@@ -429,10 +429,8 @@ async function sendMessage() {
     addMessage('user', message);
     userInput.value = ''; // 清空输入框
 
-    // --- 禁用输入和发送按钮 ---
     userInput.disabled = true;
     sendButton.disabled = true;
-    // --------------------------------
 
     // 创建思考过程元素（独立的气泡和详情面板）
     const thinkingElements = addThinkingMessage();
@@ -499,7 +497,7 @@ async function sendMessage() {
         
         showError('发送消息时发生网络错误。');
     } finally {
-        // --- 无论成功或失败，都重新启用输入和发送按钮 ---
+        //  无论成功或失败，都重新启用输入和发送按钮 
         userInput.disabled = false;
         sendButton.disabled = false;
         userInput.focus(); // 重新聚焦到输入框，方便用户继续输入
@@ -555,8 +553,7 @@ function addThinkingMessage() {
     chatArea.appendChild(detailContainer);
     chatArea.scrollTop = chatArea.scrollHeight;
     
-    // 返回包含三个引用的对象
-    return { bubble, detail, detailContainer };
+    return { bubble,detail, detailContainer };
 }
 
 /**
@@ -752,8 +749,6 @@ function newChat() {
 
     console.log("正在准备新聊天界面...");
 
-
-    // --- 修复：立即在后端创建新会话 ---
     handleNewChatRequest();
 }
 
@@ -778,7 +773,7 @@ async function handleNewChatRequest() {
         if (data.success) {
             currentSessionId = data.new_session_id;
             console.log(`新会话已创建: ${currentSessionId}`);
-            isNewSessionPendingDisplay = true; // --- 标记这个新会话等待用户输入后在UI显示
+            isNewSessionPendingDisplay = true; //  标记这个新会话等待用户输入后在UI显示
             
             addMessage('ai', '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析');
             document.getElementById('userInput').focus();
@@ -802,7 +797,7 @@ async function handleNewChatRequest() {
         return false; // 如果标题为空则不执行任何操作
     }
     try {
-        // --- 修改：使用POST方法，并将数据放在body中 ---
+        //  修改：使用POST方法，并将数据放在body中 
         const response = await fetch('/api/change_session', {
             method: 'POST',
             headers: {
@@ -815,20 +810,20 @@ async function handleNewChatRequest() {
         
         if (data.success) {
             console.log(`会话 ${sessionId} 标题已更新为 "${title}"`);
-            return true; // --- 修改：仅返回成功状态 ---
+            return true; //  修改：仅返回成功状态 
         } else {
             console.error("更新会话标题失败:", data.error);
             showError(`更新标题失败: ${data.error || '未知错误'}`);
-            return false; // --- 修改：仅返回失败状态 ---
+            return false; //  修改：仅返回失败状态 
         }
     } catch (error) {
         console.error("更新会话标题时发生网络错误:", error);
         showError("更新标题时发生网络错误。");
-        return false; // --- 修改：仅返回失败状态 ---
+        return false; //  修改：仅返回失败状态 
     }
 }
 
-// ---为标题添加可编辑监听器的辅助函数 ---
+// 为标题添加可编辑监听器的辅助函数 
 function addEditableListener(element, sessionId, title) {
     const handler = (e) => {
         e.stopPropagation();
@@ -851,7 +846,7 @@ function toggleSidebar() {
     body.classList.toggle('sidebar-active');
 }
 
-// --- 会话标题可编辑 ---
+//  会话标题可编辑 
 function makeTitleEditable(previewDiv, sessionId, oldTitle) {
     const parent = previewDiv.parentElement;
     if (!parent) {
@@ -914,7 +909,7 @@ function makeTitleEditable(previewDiv, sessionId, oldTitle) {
     });
 }
 
-// --- 在前端临时添加一个会话条目，以实现即时反馈 ---
+//  在前端临时添加一个会话条目，以实现即时反馈 
 function addTemporarySessionToUI(sessionId, title) {
     console.log("正在前端临时添加新会话条目以提高UI响应性...");
 
@@ -980,7 +975,7 @@ async function loadHistory() {
         if (Object.keys(sessions).length === 0) {
             historyList.innerHTML = '<p class="history-empty-message">还没有任何对话记录。</p>';
         } else {
-            // --- 用于跟踪当前打开的滑动项 ---
+            //  用于跟踪当前打开的滑动项 
             let currentlyOpenItem = null;
 
             // 重建历史记录部分
@@ -988,7 +983,7 @@ async function loadHistory() {
                 const session_id = session[0];
                 const info = session[1];
 
-                // --- 核心修改：创建新的DOM结构以支持滑动 ---
+                //  核心修改：创建新的DOM结构以支持滑动 
                 const historyItem = document.createElement('div');
                 historyItem.className = 'history-item';
                 historyItem.setAttribute('data-session-id', session_id);
@@ -1034,11 +1029,11 @@ async function loadHistory() {
 
                 historyList.appendChild(historyItem);
 
-                // --- 滑动逻辑 ---
+                //  滑动逻辑 
                 let isDragging = false;
                 let startX = 0;
                 let currentX = 0;
-                let hasMoved = false; // --- 关键：用于区分拖拽和点击的标志 ---
+                let hasMoved = false; //  关键：用于区分拖拽和点击的标志 
                 const threshold = -70; // 滑动阈值
 
                 const closeCurrentlyOpen = () => {
@@ -1054,7 +1049,7 @@ async function loadHistory() {
                         return;
                     }
                     closeCurrentlyOpen();
-                    hasMoved = false; // --- 关键：每次开始拖拽时，重置标志 ---
+                    hasMoved = false; //  关键：每次开始拖拽时，重置标志 
                     isDragging = true;
                     startX = e.type.includes('mouse') ? e.pageX : e.touches[0].pageX;
                     itemContent.style.transition = 'none'; // 拖动时禁用平滑过渡
@@ -1064,7 +1059,7 @@ async function loadHistory() {
                     if (!isDragging) return;
 
                     const moveX = e.type.includes('mouse') ? e.pageX : e.touches[0].pageX;
-                    // --- 关键：如果移动超过一个微小距离，就确认为拖拽 ---
+                    //  关键：如果移动超过一个微小距离，就确认为拖拽 
                     if (!hasMoved && Math.abs(moveX - startX) > 5) {
                         hasMoved = true;
                     }
@@ -1084,7 +1079,7 @@ async function loadHistory() {
                     // 重新启用平滑过渡，让"吸附"动画生效
                     itemContent.style.transition = 'transform 0.3s ease';
                     
-                    // --- 核心修改：使用 getComputedStyle 来可靠地获取当前位置 ---
+                    //  核心修改：使用 getComputedStyle 来可靠地获取当前位置 
                     const computedStyle = window.getComputedStyle(itemContent);
                     // DOMMatrix 可以安全地解析 transform 属性，无论是 'translateX' 还是 'matrix'
                     const transformMatrix = new DOMMatrix(computedStyle.transform);
@@ -1101,7 +1096,7 @@ async function loadHistory() {
                 
                 // 加载会话的点击事件
                 itemContent.addEventListener('click', (e) => {
-                    // --- 关键：如果是拖拽，则不执行点击逻辑 ---
+                    //  关键：如果是拖拽，则不执行点击逻辑 
                     if (hasMoved) {
                         e.stopPropagation();
                         return;
@@ -1136,7 +1131,7 @@ async function loadHistory() {
     }
 }
 
-// --- 处理会话删除的函数 ---
+//  处理会话删除的函数 
 async function handleDeleteSession(sessionId, element) {
     if (!confirm("确定要永久删除此会话及其所有消息吗？此操作无法撤销。")) {
         return;
@@ -1196,7 +1191,7 @@ async function loadSession(sessionId) {
         chatArea.innerHTML = ''; // 清除加载动画
 
         if (data.success) {
-            currentSessionId = sessionId; // <--- 核心修改：更新全局会话ID
+            currentSessionId = sessionId; // < 核心修改：更新全局会话ID
             data.messages.forEach(msg => {
                 addMessage(msg.sender, msg.text);
             });
@@ -1236,7 +1231,7 @@ async function handleCsvFileSelect(event) {
         return;
     }
 
-    // --- 检查会话ID ---
+    //  检查会话ID 
     if (!currentSessionId) {
         showError("没有活动的会话，无法上传文件。请新建一个对话或加载历史会话。");
         // 恢复按钮状态
@@ -1247,7 +1242,7 @@ async function handleCsvFileSelect(event) {
         event.target.value = null; // 清除文件选择
         return;
     }
-    // -------------------------
+    // -
 
     // 显示上传开始的用户消息和AI加载动画
     addMessage('user', `正在上传文件: ${file.name}`);
@@ -1278,7 +1273,7 @@ async function handleCsvFileSelect(event) {
         if (data.success) {
             // 显示成功的AI回复消息
             addMessage('ai', `已接收您的文件：${file.name}\n\n${data.message}\n\n您现在可以询问我对此文件进行因果分析。`);
-            loadFiles(); // --- 刷新文件列表
+            loadFiles(); //  刷新文件列表
         } else {
             // 显示错误的AI回复消息
             addMessage('ai', `文件上传失败：${data.error || '未知错误'}`);
@@ -1304,7 +1299,7 @@ async function handleCsvFileSelect(event) {
     }
 }
 
-// --- 渲染因果图表的函数 ---
+//  渲染因果图表的函数 
 function renderCausalGraph(containerId, graphData) {
     const container = document.getElementById(containerId);
     if (!container) {
@@ -1453,7 +1448,7 @@ function addMessage(sender, messageData, isLoading = false) {
     return messageElement;
 }
 
-// --- 加载文件列表的函数 ---
+//  加载文件列表的函数 
 async function loadFiles() {
     if (!currentUsername) {
         if (fileList) fileList.innerHTML = '<p class="files-empty-message">请先登录以查看文件列表。</p>';
@@ -1524,7 +1519,7 @@ async function loadFiles() {
 
                 fileList.appendChild(fileItem);
 
-                // --- 滑动逻辑 (与 history item 相同) ---
+                //  滑动逻辑 (与 history item 相同) 
                 let isDragging = false, startX = 0, currentX = 0, hasMoved = false;
                 const threshold = -70;
 
@@ -1604,7 +1599,7 @@ async function loadFiles() {
     }
 }
 
-// --- 处理文件删除的函数 ---
+//  处理文件删除的函数 
 async function handleDeleteFile(fileId, element) {
     if (!confirm("确定要永久删除此文件吗？此操作无法撤销。")) {
         return;
