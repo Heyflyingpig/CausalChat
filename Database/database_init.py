@@ -252,6 +252,7 @@ class OptimizedDatabaseInitializer:
     
     def _create_chat_attachments_table(self, cursor):
         """创建聊天附件表 - 用于存储大型结构化数据"""
+        # 注意：由于chat_messages是分区表，不能创建外键约束
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_attachments (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -261,7 +262,6 @@ class OptimizedDatabaseInitializer:
                 content_size INT GENERATED ALWAYS AS (LENGTH(content)) STORED COMMENT '内容大小，用于监控',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 
-                -- 注意：由于chat_messages是分区表，不能创建外键约束
                 -- FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
                 
                 INDEX idx_message_attachment (message_id, attachment_type),
