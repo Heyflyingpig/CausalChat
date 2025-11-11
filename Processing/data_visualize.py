@@ -6,7 +6,8 @@ import base64
 from typing import Dict, List, Any
 
 # 设置绘图风格，避免中文乱码问题
-plt.rcParams['font.sans-serif'] = ['SimHei']  # 指定默认字体为黑体
+# 使用 matplotlib 的通用字体回退机制，兼容 Docker 环境
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False  # 解决保存图像是负号'-'显示为方块的问题
 
 def _convert_plot_to_base64(fig: plt.Figure) -> str:
@@ -55,9 +56,9 @@ def plot_numerical_distribution(df: pd.DataFrame, column: str) -> str:
     fig, ax = plt.subplots(figsize=(8, 5))
     # 使用 seaborn 的 histplot 绘制直方图，kde=True 会同时绘制核密度估计曲线
     sns.histplot(df[column], kde=True, ax=ax)
-    ax.set_title(f"'{column}' 的分布直方图", fontsize=14)
+    ax.set_title(f"Distribution of '{column}'", fontsize=14)
     ax.set_xlabel(column, fontsize=12)
-    ax.set_ylabel("频数", fontsize=12)
+    ax.set_ylabel("Frequency", fontsize=12)
     fig.tight_layout()
     return _convert_plot_to_base64(fig)
 
@@ -77,8 +78,8 @@ def plot_categorical_distribution(df: pd.DataFrame, column: str) -> str:
     # order 参数可以按计数的降序排列条形
     order = df[column].value_counts().index
     sns.countplot(y=df[column], ax=ax, order=order)
-    ax.set_title(f"'{column}' 的类别分布条形图", fontsize=14)
-    ax.set_xlabel("计数", fontsize=12)
+    ax.set_title(f"Categorical Distribution of '{column}'", fontsize=14)
+    ax.set_xlabel("Count", fontsize=12)
     ax.set_ylabel(column, fontsize=12)
     fig.tight_layout()
     return _convert_plot_to_base64(fig)
@@ -105,7 +106,7 @@ def plot_correlation_heatmap(df: pd.DataFrame, numerical_columns: List[str]) -> 
     # annot=True 会在格子上显示数值
     # cmap='coolwarm' 是一个常用的颜色映射方案
     sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt=".2f", ax=ax)
-    ax.set_title("数值型变量相关性热力图", fontsize=16)
+    ax.set_title("Correlation Heatmap of Numerical Variables", fontsize=16)
     fig.tight_layout()
     return _convert_plot_to_base64(fig)
 
@@ -149,11 +150,11 @@ def generate_visualizations(df: pd.DataFrame, analysis_parameters: Dict[str, Any
     # 为所有识别出的数值型变量生成一张相关性热力图
     visualizations["correlation_heatmap"] = plot_correlation_heatmap(df, numerical_cols)
 
+
     return visualizations
 
 if __name__ == '__main__':
-    # --- 简单验证脚本 ---
-    # 1. 创建一个包含不同数据类型的示例 DataFrame
+
     data = {
         'age': [25, 30, 35, 40, 25, 30, 45, 50, 22, 33],
         'city': ['北京', '伦敦', '巴黎', '北京', '伦敦', '东京', '巴黎', '伦敦', '北京', '东京'],
