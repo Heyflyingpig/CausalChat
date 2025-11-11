@@ -14,6 +14,40 @@ def get_data_summary(df: pd.DataFrame) -> dict:
     Returns:
         dict: 包含完整数据摘要的字典，具有以下结构：
         
+        {   
+            "n_rows": int,
+            "n_cols": int,
+            "columns": List[str],
+            "data_types": {
+                "col_name1": "type",
+                "col_name2": "type",
+                "col_name3": "type",
+                ...
+            },
+            "column_profiles": {
+                "col_name1": {
+                    "missing_count": int,
+                    "missing_ratio": float,
+                    "unique_count": int,
+                    "is_constant": bool,
+                    "inferred_type": str,
+                    "causal_suitability": str,
+                    "issues": List[str],
+                    "value_counts": Dict[str, int],
+                    "stats": Dict[str, float],
+                    "possible_id": bool,
+                    "notes": str,
+                },
+            },
+            "quality_assessment": {
+                "total_missing_ratio": float,
+                "constant_columns": List[str],
+                "high_missing_columns": List[str],
+                "suitable_for_causal": {
+                    "excellent": List[str],
+                }
+            }
+        }
         基础数据信息:
             n_rows (int): 数据行数
             n_cols (int): 数据列数  
