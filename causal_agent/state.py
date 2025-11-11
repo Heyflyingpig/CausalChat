@@ -33,7 +33,6 @@ class CausalChatState(TypedDict):
         # Fields for final output and flow control
         final_report: Optional[str]
     """
-    # === 关键修改：为 messages 添加 reducer ===
     messages: Annotated[List[BaseMessage], add]
     
     username: str
@@ -56,6 +55,7 @@ class CausalChatState(TypedDict):
 
     # 报告
     final_report: Optional[str]
+    visualization_mapping: Optional[dict]
     
 
     

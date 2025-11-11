@@ -35,6 +35,7 @@ from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from Report.Metadata_sum import replace_placeholders
 
 
 # 在 Windows 上，默认的 asyncio 事件循环 (SelectorEventLoop) 不支持子进程。
@@ -457,37 +458,37 @@ def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Eve
 
 # 获取发送的各种值
 # 暂时闲置，未来可能使用
-@app.route('/api/send', methods=['POST'])
-def handle_message():
-    from flask import session
-    if 'user_id' not in session or 'username' not in session:
-        return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
+# @app.route('/api/send', methods=['POST'])
+# def handle_message():
+#     from flask import session
+#     if 'user_id' not in session or 'username' not in session:
+#         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
     
-    user_id = session['user_id']
-    username = session['username']
-    # --
+#     user_id = session['user_id']
+#     username = session['username']
+#     # --
 
-    data = request.json
-    user_input = data.get('message', '')
-    session_id = data.get('session_id') # < 从前端获取会话ID
+#     data = request.json
+#     user_input = data.get('message', '')
+#     session_id = data.get('session_id') # < 从前端获取会话ID
 
-    if not session_id:
-        logging.error(f"用户 {username} (ID: {user_id}) 发送消息时缺少 session_id")
-        return jsonify({'success': False, 'error': '请求无效，缺少会话ID'}), 400
+#     if not session_id:
+#         logging.error(f"用户 {username} (ID: {user_id}) 发送消息时缺少 session_id")
+#         return jsonify({'success': False, 'error': '请求无效，缺少会话ID'}), 400
 
-    logging.info(f"用户 {username} (ID: {user_id}) 在会话 {session_id} 中发送消息: {user_input[:50]}...")
+#     logging.info(f"用户 {username} (ID: {user_id}) 在会话 {session_id} 中发送消息: {user_input[:50]}...")
 
-    try:
-        # 等待异步操作完成
-        future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username, session_id), background_loop)
-        response = future.result()  # 这会阻塞当前线程直到异步任务完成
+#     try:
+#         # 等待异步操作完成
+#         future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username, session_id), background_loop)
+#         response = future.result()  # 这会阻塞当前线程直到异步任务完成
 
-        #  核心修改：显式传递 session_id，不再使用全局变量 
-        save_chat(user_id, session_id, user_input, response)
-        return jsonify({'success': True, 'response': response})
-    except Exception as e:
-        logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': f'处理消息时出错: {e}'}), 500
+#         #  核心修改：显式传递 session_id，不再使用全局变量 
+#         save_chat(user_id, session_id, user_input, response)
+#         return jsonify({'success': True, 'response': response})
+#     except Exception as e:
+#         logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}", exc_info=True)
+#         return jsonify({'success': False, 'error': f'处理消息时出错: {e}'}), 500
 
 @app.route('/api/send_stream', methods=['POST'])
 def handle_message_stream():
@@ -542,7 +543,7 @@ def handle_message_stream():
             while True:
                 # 使用 run_coroutine_threadsafe 获取队列中的数据
                 get_future = asyncio.run_coroutine_threadsafe(queue.get(), loop)
-                event_data = get_future.result(timeout=300)  # 5分钟超时
+                event_data = get_future.result(timeout=600)  # 5分钟超时
                 
                 if event_data is None:  # 结束标记
                     break
@@ -779,96 +780,96 @@ NODE_DESCRIPTIONS = {
     "normal_chat": "普通对话",
     "inquiry_answer": "基于报告回答问题"
 }
-
-async def ai_call(text, user_id, username, session_id):
-    """
-    使用我们模块化的 LangGraph agent 来处理用户请求。
-    支持中断和恢复机制（基于checkpointer，无需全局状态）。
-    """
-    logging.info(f"处理用户 {username} 的消息，会话ID: {session_id}")
+## 使用流式传输，暂时弃用该函数，采用ai_call_stream函数
+# async def ai_call(text, user_id, username, session_id):
+#     """
+#     使用我们模块化的 LangGraph agent 来处理用户请求。
+#     支持中断和恢复机制（基于checkpointer，无需全局状态）。
+#     """
+#     logging.info(f"处理用户 {username} 的消息，会话ID: {session_id}")
     
-    # 配置：使用 session_id 作为 thread_id，让 Checkpointer 自动管理状态
-    config = {
-        "configurable": {
-            "thread_id": session_id,
-            "user_id": user_id
-        }
-    }
+#     # 配置：使用 session_id 作为 thread_id，让 Checkpointer 自动管理状态
+#     config = {
+#         "configurable": {
+#             "thread_id": session_id,
+#             "user_id": user_id
+#         }
+#     }
     
-    # 检查当前状态，判断是否是恢复中断的会话
-    # LangGraph会通过checkpointer自动检测interrupt状态
-    try:
-        state = await agent_graph.aget_state(config)
-        # 如果next为空且tasks不为空，说明有pending interrupt
-        is_interrupted = state.next == () and state.tasks
+#     # 检查当前状态，判断是否是恢复中断的会话
+#     # LangGraph会通过checkpointer自动检测interrupt状态
+#     try:
+#         state = await agent_graph.aget_state(config)
+#         # 如果next为空且tasks不为空，说明有pending interrupt
+#         is_interrupted = state.next == () and state.tasks
         
-        if is_interrupted:
-            logging.info(f"检测到会话 {session_id} 处于中断状态，使用Command(resume=...)恢复")
-            # 使用 Command(resume=...) 恢复执行，传入用户输入
-            input_data = Command(resume=text)
-        else:
-            logging.info(f"正常对话或第一次对话")
-            # 构建输入（只需要新消息，历史由 Checkpointer 管理）
-            input_data = {
-                "messages": [HumanMessage(content=text)],
-                "user_id": user_id,
-                "username": username,
-                "session_id": session_id
-            }
-    except Exception as e:
-        logging.warning(f"无法获取状态，假设为新对话: {e}")
-        input_data = {
-            "messages": [HumanMessage(content=text)],
-            "user_id": user_id,
-            "username": username,
-            "session_id": session_id
-        }
+#         if is_interrupted:
+#             logging.info(f"检测到会话 {session_id} 处于中断状态，使用Command(resume=...)恢复")
+#             # 使用 Command(resume=...) 恢复执行，传入用户输入
+#             input_data = Command(resume=text)
+#         else:
+#             logging.info(f"正常对话或第一次对话")
+#             # 构建输入（只需要新消息，历史由 Checkpointer 管理）
+#             input_data = {
+#                 "messages": [HumanMessage(content=text)],
+#                 "user_id": user_id,
+#                 "username": username,
+#                 "session_id": session_id
+#             }
+#     except Exception as e:
+#         logging.warning(f"无法获取状态，假设为新对话: {e}")
+#         input_data = {
+#             "messages": [HumanMessage(content=text)],
+#             "user_id": user_id,
+#             "username": username,
+#             "session_id": session_id
+#         }
     
-    #  执行图 
-    try:
-        final_state_data = None
-        interrupt_info = None
+#     #  执行图 
+#     try:
+#         final_state_data = None
+#         interrupt_info = None
         
-        # 使用 astream 流式执行，可以捕获 interrupt 事件
-        async for event in agent_graph.astream(input_data, config, stream_mode="values"):
-            logging.info(f"收到事件: {list(event.keys())}")
+#         # 使用 astream 流式执行，可以捕获 interrupt 事件
+#         async for event in agent_graph.astream(input_data, config, stream_mode="values"):
+#             logging.info(f"收到事件: {list(event.keys())}")
             
-            # 检查是否遇到 interrupt
-            if "__interrupt__" in event:
-                interrupt_info = event["__interrupt__"]
-                logging.info(f"检测到 interrupt: {interrupt_info}")
-                final_state_data = event  # 保存包含interrupt的状态
-                break
+#             # 检查是否遇到 interrupt
+#             if "__interrupt__" in event:
+#                 interrupt_info = event["__interrupt__"]
+#                 logging.info(f"检测到 interrupt: {interrupt_info}")
+#                 final_state_data = event  # 保存包含interrupt的状态
+#                 break
             
-            # 收集正常的状态更新
-            if isinstance(event, dict) and event:
-                final_state_data = event
+#             # 收集正常的状态更新
+#             if isinstance(event, dict) and event:
+#                 final_state_data = event
         
-        if interrupt_info:
-            # 提取 interrupt 传递的问题
-            # interrupt_info 是一个列表，包含Interrupt对象
-            interrupt_obj = interrupt_info[0] if isinstance(interrupt_info, (list, tuple)) else interrupt_info
+#         if interrupt_info:
+#             # 提取 interrupt 传递的问题
+#             # interrupt_info 是一个列表，包含Interrupt对象
+#             interrupt_obj = interrupt_info[0] if isinstance(interrupt_info, (list, tuple)) else interrupt_info
             
-            # Interrupt 对象有 value 属性，包含实际的问题文本
-            question = interrupt_obj.value if hasattr(interrupt_obj, 'value') else str(interrupt_obj)
+#             # Interrupt 对象有 value 属性，包含实际的问题文本
+#             question = interrupt_obj.value if hasattr(interrupt_obj, 'value') else str(interrupt_obj)
             
-            # 注意：不需要全局状态，checkpointer会自动管理
-            logging.info(f"图已暂停，等待用户输入。问题: {question}")
-            return {
-                "type": "human_input_required",
-                "summary": question
-            }
+#             # 注意：不需要全局状态，checkpointer会自动管理
+#             logging.info(f"图已暂停，等待用户输入。问题: {question}")
+#             return {
+#                 "type": "human_input_required",
+#                 "summary": question
+#             }
         
-        if final_state_data:
-            return process_final_result(final_state_data)
-        else:
-            # 如果没有收集到状态，直接获取最终状态
-            final_state_data = await agent_graph.aget_state(config)
-            return process_final_result(final_state_data.values)
+#         if final_state_data:
+#             return process_final_result(final_state_data)
+#         else:
+#             # 如果没有收集到状态，直接获取最终状态
+#             final_state_data = await agent_graph.aget_state(config)
+#             return process_final_result(final_state_data.values)
             
-    except Exception as e:
-        logging.error(f"执行 LangGraph Agent 时发生错误: {e}", exc_info=True)
-        return {"type": "text", "summary": f"处理请求时出现错误: {e}"}
+#     except Exception as e:
+#         logging.error(f"执行 LangGraph Agent 时发生错误: {e}", exc_info=True)
+#         return {"type": "text", "summary": f"处理请求时出现错误: {e}"}
 
 async def ai_call_stream(text, user_id, username, session_id):
     """
@@ -1020,7 +1021,7 @@ def process_final_result(final_state_data):
     3. 如果有因果图数据，返回结构化响应
     """
     
-    # === 优先级 1：检查最后一条消息 ===
+    # 检查最后一条消息 
     messages = final_state_data.get("messages", [])
     if messages:
         last_message = messages[-1]
@@ -1042,35 +1043,48 @@ def process_final_result(final_state_data):
             # 检查是否同时有 final_report
             if message_name == 'report' and final_state_data.get("final_report"):
                 logging.info("返回完整的因果分析报告")
-                
+                result = {
+                    "summary": final_state_data["final_report"],
+                }
                 # 检查是否有因果图数据（结构化返回）
                 if final_state_data.get("causal_analysis_result"):
                     analysis_data = final_state_data["causal_analysis_result"]
                     if analysis_data.get("success"):
-                        return {
-                            "type": "causal_graph",
-                            "summary": final_state_data["final_report"],
-                            "data": analysis_data.get("data")
-                        }
-                
-                # 只有报告，没有图数据
-                return {
-                    "type": "text",
-                    "summary": final_state_data["final_report"]
-                }
+                        result["type"] = "causal_graph"
+                        result["data"] = analysis_data.get("data")
+                        logging.info("返回因果图数据")
+
+                if "type" not in result:
+                    result["type"] = "text"
+
+                # 检查是否有可视化映射，并替换占位符
+                if final_state_data.get("visualization_mapping"):
+                    visualization_mapping = final_state_data["visualization_mapping"]
+                    if visualization_mapping:  # 确保不是空字典
+                        # 保存映射数据（用于数据库存储）
+                        result["visualization_mapping"] = visualization_mapping
+                        logging.info(f"包含 {len(visualization_mapping)} 个可视化图表")
+
+                        # 替换 summary 中的占位符为真实图表
+                        result["summary"] = replace_placeholders(
+                            result["summary"],
+                            visualization_mapping
+                        )
+                        logging.info("已替换报告中的占位符为真实图表")
+
+                return result
     
-    # === 优先级 2：降级方案，返回 final_report（如果有）===
+    # 返回 final_report（如果有）
     final_report = final_state_data.get("final_report")
     if final_report:
         logging.info("未找到最新消息，降级返回 final_report")
         return {"type": "text", "summary": final_report}
     
-    # === 优先级 3：最后的降级方案 ===
     logging.warning("未找到任何可返回的内容，返回默认消息")
     return {"type": "text", "summary": "抱歉，我在处理时遇到了问题。"}
 
 
-## 保存历史文件 ( 添加 user_id 参数和列)
+## 保存历史文件 
 def save_chat(user_id, session_id, user_msg, ai_response):
     """
     将用户和AI的交互保存到新的优化数据库结构中。
@@ -1102,55 +1116,74 @@ def save_chat(user_id, session_id, user_msg, ai_response):
             else:
                 # Session已存在，判断是否为第一条消息
                 is_first_message = session_data['message_count'] == 0
-            # 
             
-            # 1. 保存用户消息
+            # 保存用户消息
             sql_user = """
                 INSERT INTO chat_messages (session_id, user_id, message_type, content, created_at)
                 VALUES (%s, %s, 'user', %s, %s)
             """
             cursor.execute(sql_user, (session_id, user_id, user_msg, timestamp_dt))
             
-            # 2. 保存AI消息
+            # 保存AI消息
             ai_content = ""
-            has_attachment = False
             attachment_content = None
             attachment_type = 'other'
+            attachment_to_save = []
 
             if isinstance(ai_response, dict):
                 # 确保 summary 键存在且不为 None
                 ai_content = ai_response.get('summary')
+                
                 if ai_content is None:
                     # 如果 summary 为空，将整个响应序列化为字符串作为备用
                     ai_content = json.dumps(ai_response, ensure_ascii=False)
                 
                 if ai_response.get('type') == 'causal_graph' and 'data' in ai_response:
-                    has_attachment = True
                     attachment_type = 'causal_graph'
                     attachment_content = json.dumps(ai_response, ensure_ascii=False) # 保存完整响应
+                    attachment_to_save.append({
+                        "type": attachment_type,
+                        "content": attachment_content
+                    })
+                
+                if ai_response.get('visualization_mapping'):
+                    attachment_type = 'visualization'
+                    attachment_content = json.dumps(ai_response.get('visualization_mapping'), ensure_ascii=False)
+                    attachment_to_save.append({
+                        "type": attachment_type,
+                        "content": attachment_content
+                    })
+
             elif isinstance(ai_response, str):
                 ai_content = ai_response
             else:
                 ai_content = json.dumps(ai_response, ensure_ascii=False)
-
+            
+            # 处理数据库保存格式
             sql_ai = """
                 INSERT INTO chat_messages (session_id, user_id, message_type, content, has_attachment, created_at)
                 VALUES (%s, %s, 'ai', %s, %s, %s)
             """
+            has_attachment = len(attachment_to_save) > 0
             cursor.execute(sql_ai, (session_id, user_id, ai_content, has_attachment, timestamp_dt))
             ai_message_id = cursor.lastrowid # 获取AI消息的ID，用于关联附件
 
             # 3. 如果有附件，保存到 chat_attachments
-            if has_attachment and attachment_content:
-                sql_attachment = """
+            if has_attachment and attachment_to_save:
+                for attachment in attachment_to_save:
+                    sql_attachment = """
                     INSERT INTO chat_attachments (message_id, attachment_type, content, created_at)
                     VALUES (%s, %s, %s, %s)
-                """
-                cursor.execute(sql_attachment, (ai_message_id, attachment_type, attachment_content, timestamp_dt))
+                    """
+                    logging.info(f"准备保存附件: type={attachment['type']}, content_size={len(attachment['content'])} 字节")
+                    cursor.execute(sql_attachment,
+                    (ai_message_id, attachment['type'], attachment['content'], timestamp_dt))
+                    logging.info(f"成功保存附件: {attachment['type']}")
+            
 
             # 修改：根据是否为第一条消息，决定是否更新标题
             if is_first_message:
-                # 4a. 更新会话，包括新标题（或确认创建时的标题）
+                #  更新会话，包括新标题（或确认创建时的标题）
                 new_title = user_msg[:8] # 截取前8个字符作为标题
                 new_title = new_title + "..." if len(user_msg) > 8 else new_title
                 sql_update_session = """
@@ -1160,7 +1193,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
                 """
                 cursor.execute(sql_update_session, (new_title, timestamp_dt, session_id, user_id))
             else:
-                # 4b. 只更新活动时间和消息数
+                #  只更新活动时间和消息数
                 sql_update_session = """
                     UPDATE sessions 
                     SET last_activity_at = %s, message_count = message_count + 2
@@ -1254,8 +1287,7 @@ def get_file_list():
     
     logging.info(f"为用户 {user_id} 返回 {len(file_list_for_frontend)} 个文件")
     return jsonify(file_list_for_frontend)
-        
-            
+
 
 # 加载特定会话内容 (**修改：** 增加用户验证)
 @app.route('/api/load_session')
@@ -1278,47 +1310,77 @@ def load_session_content():
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor(dictionary=True)
-            
-            #  核心修改：处理延迟创建的session 
+
+            #  核心修改：处理延迟创建的session
             # 首先检查session是否存在
             cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
             session_exists = cursor.fetchone()
-            
+
             if not session_exists:
                 # Session还不存在（用户还没发送第一条消息），返回空消息列表
-                logging.info(f"会话 {session_id} 尚未创建（延迟创建模式），返回空消息列表")
+                logging.info(f"会话 {session_id} 尚未创建，返回空消息列表")
                 return jsonify({"success": True, "messages": []})
-            # --
 
-            # 获取所有消息，并左连接附件表
-            # 这里的 cm 是 chat_messages 表的别名,ca 是 chat_attachments 表的别名
+
+            # 按照id获取所有消息和其附件，并且顺序排序，时间由早到晚
             cursor.execute("""
-                SELECT 
-                    cm.id, cm.message_type, cm.content, cm.has_attachment,
-                    ca.content as attachment_content
-                FROM chat_messages cm
-                LEFT JOIN chat_attachments ca ON cm.id = ca.message_id AND cm.has_attachment = TRUE
-                WHERE cm.session_id = %s
-                ORDER BY cm.created_at ASC
+                SELECT
+                    id,message_type,content,has_attachment
+                FROM chat_messages
+                WHERE session_id = %s
+                ORDER BY created_at ASC
             """, (session_id,))
             chat_rows = cursor.fetchall()
 
-        for row in chat_rows:
-            sender = "user" if row["message_type"] == 'user' else "ai"
-            
-            # 如果是AI消息，且有附件，则优先使用附件内容
-            if sender == "ai" and row["has_attachment"] and row["attachment_content"]:
-                try:
-                    # 附件内容本身就是完整的结构化JSON
-                    structured_content = json.loads(row["attachment_content"])
-                    messages.append({"sender": "ai", "text": structured_content})
-                except (json.JSONDecodeError, TypeError):
-                    logging.warning(f"无法解析附件内容，回退到文本。Message ID: {row['id']}")
-                    messages.append({"sender": "ai", "text": row["content"]})
-            else:
-                # 对于用户消息或没有附件的AI消息，直接使用content
-                messages.append({"sender": sender, "text": row["content"]})
-        
+            # 处理每条消息（在 with 语句内部）
+            for row in chat_rows:
+                sender = "user" if row["message_type"] == 'user' else "ai"
+
+                # 如果是AI消息，且有附件，则优先使用附件内容
+                if sender == "ai" and row["has_attachment"]:
+                    cursor.execute("""
+                        SELECT attachment_type, content
+                         FROM chat_attachments
+                        WHERE message_id = %s
+                    """, (row["id"],))
+                    attachments = cursor.fetchall()
+
+                    causal_graph_data = None
+                    visualization_mapping = None
+
+                    ## attachment格式：{"type": "causal_graph", "content": {...}}
+                    for attachment in attachments:
+                        if attachment["attachment_type"] == "causal_graph":
+                            try:
+                                causal_graph_data = json.loads(attachment["content"])
+                            except json.JSONDecodeError:
+                                logging.warning(f"无法解析 causal_graph 附件，Message ID: {row['id']}")
+
+                        elif attachment["attachment_type"] == "visualization":
+                            try:
+                                visualization_mapping = json.loads(attachment["content"])
+                            except json.JSONDecodeError:
+                                logging.warning(f"无法解析 visualization 附件，Message ID: {row['id']}")
+
+                    if causal_graph_data:
+                        message_content = causal_graph_data
+
+                        if visualization_mapping and "summary" in message_content:
+                            message_content["summary"] = replace_placeholders(message_content["summary"], visualization_mapping)
+
+                        messages.append({"sender": "ai", "text": message_content})
+                    else:
+                        message_text = row["content"]
+
+                        if visualization_mapping:
+                            message_text = replace_placeholders(message_text, visualization_mapping)
+
+                        messages.append({"sender": "ai", "text": message_text})
+
+                else:
+                    # 对于用户消息或没有附件的AI消息，直接使用content
+                    messages.append({"sender": sender, "text": row["content"]})
+
         logging.info(f"用户 {username} 成功加载会话 {session_id} ({len(messages)} 条消息)")
         return jsonify({"success": True, "messages": messages})
 
@@ -1329,6 +1391,8 @@ def load_session_content():
         logging.error(f"加载会话 {session_id} (用户 {username}) 时发生未知错误: {e}")
         return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
  
+
+
 @app.route('/api/change_session', methods=['POST'])
 def change_session():
     #  用户认证检查 

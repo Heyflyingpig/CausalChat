@@ -19,7 +19,7 @@ def decision_router(state: CausalChatState) -> str:
     elif "报告" in agent_decision:
         logging.info("路由决策 -> 前往[追问模块]")
         return "inquiry_answer"
-    else: # "普通问答" or any other default
+    else: 
         logging.info("路由决策 -> 前往[普通问答]")
         return "normal_chat"
 

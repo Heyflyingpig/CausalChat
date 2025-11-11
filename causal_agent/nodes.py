@@ -45,7 +45,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
     """
     Agent节点，是图的起点，用于判断是否需要进入causal循环，
-    根据当前状态强制LLM做出三选一的决策，然后将该决策转化为消息。
+    根据当前状态强制LLM做出四选一的决策，然后将该决策转化为消息。
     """
     logging.info(" 步骤: Agent 节点 (LLM 决策) ")
 
@@ -55,8 +55,7 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     agent_prompt = """
             你是一个专业的AI助手路由中枢。你的任务是根据用户的对话历史和当前状态，决定下一步的最佳路径。
             
-            # 用户需求或者对话历史:
-            {messages}
+            # 用户需求或者对话历史:{messages}
             # 当前状态摘要:
             - 是否已获得分析工具的结果: {has_tool_results}
             - 是否已获取到了最终的报告：{final_report}
@@ -286,7 +285,12 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {recommends}")
             new_messages.append(recommend_message)
         
-        return {"messages": new_messages, "analysis_parameters": state['analysis_parameters'], "fold_name": state['fold_name'], "file_content": state['file_content']}
+        return {"messages": new_messages, 
+                "analysis_parameters": state['analysis_parameters'], 
+                "fold_name": state['fold_name'], 
+                "file_content": state['file_content'],
+                "tool_call_request": False
+                }
     
     else:
         logging.warning(f"验证失败，需要人工干预。原因: {', '.join(issues)}")
@@ -613,7 +617,8 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
             "postprocess_result": postprocess_result
         }
 
-
+## 调用元数据
+from Report.Metadata_sum import metadata_summary, metadata_mapping
 def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
     报告模块：
@@ -628,17 +633,34 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
          
          你的任务是根据用户的对话历史和当前状态，按照要求的报告格式生成一份综合的，完整的因果领域报告
          # 当前状态摘要
-         1. 因果分析结果：{causal_analysis_result}
-         2. 知识库结果：{knowledge_base_result}
-         3. 后处理结果：{postprocess_result}
+         1. 预处理结果：{preprocess_summary}
+         2. 预处理元数据：{preprocess_meta_data}
+         2. 因果分析结果：{causal_analysis_result}
+         3. 知识库结果：{knowledge_base_result}
+         4. 后处理结果：{postprocess_result}
          
-         # 报告格式要求
-         1. 报告格式为markdown格式
-         2. 报告内容包括：
-            - 分析总结：需要概括性的总结因果分析结果
-            - 分析过程：需要详细描述分析的过程，每个步骤需要详细且专业
-            - 分析结果：简要总结分析                          
-         """
+        ## 报告结构要求
+        1. **数据概览**：基于上述数据概览进行总结
+
+        2. **数据可视化**：在合适的位置插入图表，帮助读者理解数据分布
+            - 如果用户没有提到具体的变量类型，必须插入所有变量的图表，变量需要从预处理元数据中获取
+            - 如果用户提到了具体的变量类型，则只插入该变量的图表，变量类型需要从预处理元数据中获取
+        3. **分析过程**：详细描述因果分析的步骤和方法
+        4. **分析结果**：总结主要发现和因果关系
+
+        ## 图表插入规则
+        - 当你想要插入某个图表时，直接在文本中使用对应的占位符(占位符见预处理元数据)
+        - 例如：要展示年龄分布，就写 [[CHART:histogram_age]]
+        - 占位符需要单独成行，前后空一行
+        - 在占位符前后添加必要的文字说明，解释这个图表展示了什么
+        ### 示例格式:
+        #### 年龄分布特征
+        从收集的数据来看，用户年龄主要集中在...
+
+        [[CHART:histogram_age]]
+
+        上图展示了年龄的分布情况，我们可以观察到...、
+        """
     )
     
     prompt = ChatPromptTemplate.from_messages(
@@ -651,9 +673,14 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     # 格式化字符串输出
     runnable = prompt | llm | StrOutputParser()
     
+    meta_data = metadata_summary(state.get("analysis_parameters", {}), state.get("visualizations", {}))
+    mapping_data = metadata_mapping(meta_data, state.get("visualizations", {}))
+    
     # 在invoke时，将模板变量和消息历史分开传入
     response = runnable.invoke({
         "messages": state["messages"],
+        "preprocess_meta_data": meta_data,
+        "preprocess_summary": state.get("preprocess_summary", {}),
         "causal_analysis_result": state.get("causal_analysis_result", {}),
         "knowledge_base_result": state.get("knowledge_base_result", {}),
         "postprocess_result": state.get("postprocess_result", {}),
@@ -666,10 +693,25 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         content="决策：因果分析报告已生成完成。",
         name="report"
     )
-    
+    # 占位符替换：将报告中的占位符替换为实际的 HTML 图片标签
+
+    ## 注释:避免数据库中存入最终报告的html图片标签，导致数据库爆炸
+    # final_report = response
+    # try:
+    #     for placeholder, base64_str in mapping_data.items():
+
+    #         html_img = f'<img src="data:image/png;base64,{base64_str}" alt="{placeholder}" style="max-width:100%; height:auto; display:block; margin:20px 0;" />'
+    #         final_report = final_report.replace(placeholder, html_img)
+        
+    #     logging.info(f"成功替换了 {len(mapping_data)} 个图表占位符")
+    # except Exception as e:
+    #     logging.error(f"替换图表占位符时发生错误: {e}", exc_info=True)
+    #     # 如果替换失败，仍然返回原始报告（不含图片）
+    #     final_report = response
     # 只返回新消息和最终报告
     return {
-        "final_report": response,
+        "final_report": response,  
+        "visualization_mapping": mapping_data,
         "messages": [report_complete_message]
     }
 
