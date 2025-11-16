@@ -155,7 +155,7 @@
     /* 伪元素 */
     .chat-area::before {
         /* 聊天区域的背景水印文字 */
-        content: 'FLYINGPIG-CausalChat'; /* 水印显示的文字 */
+        content: 'CausalChat'; /* 水印显示的文字 */
         position: absolute; /* 绝对定位，相对于.chat-area */
         top: 50%; /* 垂直居中 */
         left: 50%; /* 水平居中 */
@@ -232,12 +232,12 @@
     .message {
         /* 所有消息（用户和AI）的通用容器 */
         display: flex; /* 使用Flexbox布局 */
-        max-width: 80%; /* 消息最大宽度不超过父容器的80% */
+        max-width: min(80%, 880px); /* 消息最大宽度不超过父容器的80% */
         position: relative; /* 为内部绝对定位的元素提供基准 */
         z-index: 1; /* 确保消息在水印之上 */
         margin-bottom: 10px; /* 消息之间的外边距 */
     }
-    
+
     .message .content {
         /* 消息气泡本身 */
         padding: 10px 15px 10px 15px;
@@ -274,6 +274,8 @@
         background-color: #f1f0f0; /* 浅灰色 */
         margin-left: 20px; /* 与左侧边缘的距离 */
         padding-left: 20px; /* 内边距 */
+        font-size: 15px; /* AI 长文本正文字号，稍微缩小以提升阅读体验 */
+        line-height: 1.6; /* AI 长文本行距，提升可读性 */
 
     }
     /*  修改结束  */
@@ -281,12 +283,35 @@
     /* 新增：因果图容器样式 */
     .causal-graph-container {
         /* 用于显示因果关系图表的容器 */
-        width: 100%; 
-        height: 400px; 
+        width: 100%;
+        height: 400px;
         border: 1px solid #ddd; /* 灰色边框 */
         border-radius: 5px; /* 边框圆角 */
-        margin-top: 10px; 
+        margin-top: 10px;
         background: #fff; /* 白色背景 */
+    }
+
+    /* 因果分析报告包裹容器样式，用于区别普通对话 */
+    .causal-report {
+        background-color: #f5f5f5;
+        border-radius: 8px;
+        padding: 16px 20px;
+    }
+
+    /* AI 消息中的 Markdown 标题样式，避免标题过大占屏 */
+    .ai-message .content h1 {
+        font-size: 22px;
+        margin: 12px 0 8px;
+    }
+
+    .ai-message .content h2 {
+        font-size: 18px;
+        margin: 10px 0 6px;
+    }
+
+    .ai-message .content h3 {
+        font-size: 16px;
+        margin: 8px 0 4px;
     }
     /* 会话预览样式 */
     .preview-text {
@@ -798,7 +823,7 @@
     padding: 0;
     margin-bottom: 5px;  /* 减小间距，因为下方会有详情面板 */
     max-width: 80%;
-    align-self: flex-start;
+    margin-left: 20px; /* 与左侧边缘的距离 */
 }
 
 /* 思考过程头部 - 可点击展开/收起 */
@@ -810,6 +835,7 @@
     user-select: none;
     transition: background-color 0.2s;
     border-radius: 10px;
+    margin-left: 20px; /* 与左侧边缘的距离 */
 }
 
 /* 悬停时显示背景色变化 */

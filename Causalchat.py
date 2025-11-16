@@ -1045,6 +1045,7 @@ def process_final_result(final_state_data):
                 logging.info("返回完整的因果分析报告")
                 result = {
                     "summary": final_state_data["final_report"],
+                    "layout": "report"
                 }
                 # 检查是否有因果图数据（结构化返回）
                 if final_state_data.get("causal_analysis_result"):
@@ -1078,13 +1079,13 @@ def process_final_result(final_state_data):
     final_report = final_state_data.get("final_report")
     if final_report:
         logging.info("未找到最新消息，降级返回 final_report")
-        return {"type": "text", "summary": final_report}
+        return {"type": "text", "summary": final_report, "layout": "report"}
     
     logging.warning("未找到任何可返回的内容，返回默认消息")
     return {"type": "text", "summary": "抱歉，我在处理时遇到了问题。"}
 
 
-## 保存历史文件 
+## 保存历史文件     
 def save_chat(user_id, session_id, user_msg, ai_response):
     """
     将用户和AI的交互保存到新的优化数据库结构中。

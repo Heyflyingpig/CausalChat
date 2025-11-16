@@ -1404,10 +1404,20 @@ function addMessage(sender, messageData, isLoading = false) {
             // 处理AI的结构化响应
             if (messageData.type === 'causal_graph' && messageData.data) {
                 // 1. 添加总结文本（如果存在）
+                // isReportLayout: 只要是因果图类型，就按报告样式展示；若显式标记 layout === 'report' 也同样视为报告
+                const isReportLayout = messageData.layout === 'report' || messageData.type === 'causal_graph';
+                let reportContainer = contentElement;
+                if (isReportLayout) {
+                    const reportWrapper = document.createElement('div');
+                    reportWrapper.classList.add('causal-report');
+                    contentElement.appendChild(reportWrapper);
+                    reportContainer = reportWrapper;
+                }
+
                 if (messageData.summary) {
                     const summaryDiv = document.createElement('div');
                     summaryDiv.innerHTML = marked.parse(messageData.summary);
-                    contentElement.appendChild(summaryDiv);
+                    reportContainer.appendChild(summaryDiv);
                 }
 
                 // 2. 创建并渲染因果图
@@ -1416,7 +1426,7 @@ function addMessage(sender, messageData, isLoading = false) {
                 const graphContainer = document.createElement('div');
                 graphContainer.id = graphContainerId;
                 graphContainer.classList.add('causal-graph-container'); // 用于样式
-                contentElement.appendChild(graphContainer);
+                reportContainer.appendChild(graphContainer);
 
                 // 使用 setTimeout 确保元素已添加到 DOM 中
                 // vis.js 需要一个已挂载的容器来进行初始化
@@ -1426,7 +1436,14 @@ function addMessage(sender, messageData, isLoading = false) {
 
             } else if (messageData.summary) {
                 // 对于其他类型的结构化响应（例如只有 'type': 'text'），只显示总结
-                contentElement.innerHTML = marked.parse(messageData.summary);
+                if (messageData.layout === 'report') {
+                    const reportWrapper = document.createElement('div');
+                    reportWrapper.classList.add('causal-report');
+                    reportWrapper.innerHTML = marked.parse(messageData.summary);
+                    contentElement.appendChild(reportWrapper);
+                } else {
+                    contentElement.innerHTML = marked.parse(messageData.summary);
+                }
             } else {
                 // 如果对象无法识别，则作为字符串显示以供调试
                 contentElement.textContent = JSON.stringify(messageData, null, 2);
@@ -1437,13 +1454,13 @@ function addMessage(sender, messageData, isLoading = false) {
         }
 
     }
-    
+
     // 直接添加内容元素，不需要头像
     messageElement.appendChild(contentElement);
-    
+
     chatArea.appendChild(messageElement);
     chatArea.scrollTop = chatArea.scrollHeight; // 自动滚动到底部
-    
+
     // 返回消息元素，以便后续可以移除（例如加载动画）
     return messageElement;
 }
