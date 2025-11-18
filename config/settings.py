@@ -39,21 +39,21 @@ class AppConfig:
         所有配置都从环境变量加载（本地开发通过.env文件自动加载到环境变量）
         """
         
-        # --- 应用必需的配置 ---
+        # 应用必需的配置
         self.SECRET_KEY = self._get_config("SECRET_KEY")
 
-        # --- AI 模型配置 ---
+        # AI 模型配置
         self.API_KEY = self._get_config("API_KEY")
         self.BASE_URL = self._get_config("BASE_URL")
         self.MODEL = self._get_config("MODEL")
 
-        # --- 数据库配置 ---
+        # 数据库配置
         self.MYSQL_HOST = self._get_config("MYSQL_HOST")
         self.MYSQL_USER = self._get_config("MYSQL_USER")
         self.MYSQL_PASSWORD = self._get_config("MYSQL_PASSWORD")
         self.MYSQL_DATABASE = self._get_config("MYSQL_DATABASE")
         
-        # --- LangSmith (可选配置) ---
+        # LangSmith 
         # 可选配置不强制要求，缺失时使用默认值
         self.LANGCHAIN_API_KEY = self._get_config("LANGCHAIN_API_KEY", required=False)
         self.LANGCHAIN_PROJECT = self._get_config(
@@ -119,7 +119,7 @@ class AppConfig:
         else:
             logging.warning("未找到 'LANGCHAIN_API_KEY' 环境变量。LangSmith 追踪将不会启用。")
 
-# --- 单例模式：创建全局唯一的配置实例 ---
+#  单例模式：创建全局唯一的配置实例 
 # 在应用启动时，尝试加载配置。
 # 如果失败，settings 将为 None，依赖此配置的服务将无法启动。
 settings = None
@@ -128,6 +128,5 @@ try:
     logging.info("应用配置已从环境变量成功加载。")
 except (FileNotFoundError, ValueError) as e:
     logging.critical(f"配置加载失败，应用无法启动: {e}")
-    # 让主程序决定如何处理这个致命错误
-    # 在这里不调用 sys.exit()，只重新抛出异常
+
     raise 
