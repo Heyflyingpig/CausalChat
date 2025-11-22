@@ -106,7 +106,7 @@ async function handleLogin() {
 
         if (data.success && data.username) { // 确保返回了 username
             // 登录成功
-            currentUsername = data.username; // **修改**: 设置全局变量
+            currentUsername = data.username; //  设置全局变量
             document.body.classList.add('logged-in'); // 添加标记类
             authOverlay.classList.remove('active'); // 隐藏登录/注册层
             
@@ -144,7 +144,7 @@ async function handleLogout() {
 
         if (data.success) {
             console.log("后端登出成功");
-            currentUsername = null; // **修改**: 清除全局变量
+            currentUsername = null; //  清除全局变量
             chatEventListenersAttached = false; //  重置监听器标志 
             document.body.classList.remove('logged-in'); // 移除标记类
             authOverlay.classList.add('active'); // 显示登录/注册层
@@ -153,7 +153,7 @@ async function handleLogout() {
             closeUserInfoPopup(); // 关闭用户信息弹窗
             document.getElementById('chatArea').innerHTML = ''; // 清空聊天区域
             historyList.innerHTML = ''; // 清空历史列表
-            fileList.innerHTML = ''; //  新增: 清空文件列表 
+            fileList.innerHTML = ''; //  清空文件列表 
             updateUserInfo(); // 清空头像等信息
             console.log("用户已退出登录，UI已更新");
         } else {
