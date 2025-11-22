@@ -17,13 +17,6 @@ from contextlib import AsyncExitStack
 import threading
 import hashlib
 import bcrypt
-
-try:
-    from config.settings import settings
-except (ValueError, FileNotFoundError) as e:
-    logging.critical(f"无法加载应用配置，程序终止。错误: {e}")
-    sys.exit(1)
-
 from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -37,13 +30,16 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from Report.Metadata_sum import replace_placeholders
 
+try:
+    from config.settings import settings
+except (ValueError, FileNotFoundError) as e:
+    logging.critical(f"无法加载应用配置，程序终止。错误: {e}")
+    sys.exit(1)
 
 # 在 Windows 上，默认的 asyncio 事件循环 (SelectorEventLoop) 不支持子进程。
 # MCP 客户端需要通过子进程启动服务器，因此我们必须切换到 ProactorEventLoop。
-# 这行代码必须在任何 asyncio 操作（尤其是创建事件循环）之前执行。
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -65,7 +61,6 @@ os.makedirs(os.path.join(BASE_DIR, 'static', 'generated_graphs'), exist_ok=True)
 SETTING_DIR = os.path.join(BASE_DIR, "setting")
 
 # 将 MCP 和事件循环,llm和rag链的相关的状态集中管理
-
 mcp_session: ClientSession | None = None
 mcp_tools: list = []
 mcp_process_stack = AsyncExitStack()
@@ -77,7 +72,7 @@ agent_graph = None
 
 def initialize_llm():
     """在应用启动时初始化全局LLM实例。"""
-    global llm, agent_graph
+    global llm
     # 使用新的配置对象
     if not all([settings.MODEL, settings.BASE_URL, settings.API_KEY]):
         logging.error("LLM 配置不完整，无法初始化。")
@@ -88,11 +83,10 @@ def initialize_llm():
         model=settings.MODEL,
         base_url=settings.BASE_URL,
         api_key=settings.API_KEY,
-        temperature=0,
         streaming=False,
     )
     logging.info("LLM 实例初始化成功。")
-    #  Agent Graph 的创建将推迟到 MCP 连接就绪后 
+
     return True
 
 
@@ -129,7 +123,7 @@ def check_database_readiness():
             cursor = conn.cursor()
             
             # 检查新的、优化的表是否存在
-            required_tables = ['users', 'sessions', 'chat_messages', 'chat_attachments', 'uploaded_files', 'archived_sessions']
+            required_tables = ['users', 'sessions', 'chat_messages', 'chat_attachments', 'uploaded_files', 'archived_sessions','checkpoints','checkpoint_writes']
             cursor.execute(f"""
                 SELECT table_name 
                 FROM information_schema.tables 
@@ -182,7 +176,6 @@ except Exception as e:
     print(f"\n 数据库检查失败: {e}")
     sys.exit(1)
 
-# 全局状态
 
 
 # 查找用户
@@ -206,6 +199,7 @@ def find_user(username):
         logging.error(f"查找用户 '{username}' 时发生未知错误: {e}")
         return None
 
+# 哈希密码
 def hash_password(password):
     hashed_password = bcrypt.hashpw(
         password.encode('utf-8'), 
@@ -252,6 +246,7 @@ def register_user(username, plain_password):
         logging.error(f"注册用户 '{username}' 时发生未知错误: {e}")
         return False, "注册过程中发生服务器错误。"
 
+# 获取聊天记录
 def get_chat_history(session_id: str, user_id: int, limit: int) -> list:
     """从数据库获取指定会话的最近聊天记录。"""
     history = []
@@ -285,8 +280,6 @@ def get_chat_history(session_id: str, user_id: int, limit: int) -> list:
     except Exception as e:
         logging.error(f"为会话 {session_id} 获取历史记录时发生未知错误: {e}")
         return []
-
-
 
 # 获取注册值,检查注册值
 @app.route('/api/register', methods=['POST'])
@@ -371,7 +364,6 @@ def handle_logout():
 
     #  核心修改：清除会话 
     session.clear()
-    # -
 
     return jsonify({'success': True})
 
@@ -379,7 +371,7 @@ def handle_logout():
 @app.route('/api/check_auth', methods=['GET'])
 def check_auth():
     """检查当前后端记录的登录状态"""
-    #  重构：检查 Flask Session 
+    #  检查 Flask Session 
     from flask import session
     if 'user_id' in session and 'username' in session:
         username = session['username']
@@ -388,7 +380,6 @@ def check_auth():
     else:
         logging.debug("检查认证状态：无有效会话")
         return jsonify({'isLoggedIn': False})
-
 
 
 # MCP生命周期管理与后台事件循环
@@ -591,21 +582,6 @@ def handle_message_stream():
         }
     )
 
-@app.route('/api/new_chat',methods=['POST'])
-
-def new_chat():
-    from flask import session
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'error': '用户未登录'}), 401
-    
-    user_id = session['user_id']
-    username = session.get('username', '未知用户')
-    new_session_id = str(uuid.uuid4())
-
-    # 核心修改：不再立即创建数据库记录，只生成session_id
-    # 会话记录将在用户发送第一条消息时通过 save_chat() 函数创建
-    logging.info(f"用户 {username} (ID: {user_id}) 生成新会话ID: {new_session_id} (延迟创建)")
-    return jsonify({'success': True, 'new_session_id': new_session_id})
 
 # 初始化rag链
 def initialize_rag_system():
@@ -662,8 +638,6 @@ def initialize_rag_system():
         logging.error(f"初始化 RAG 系统时发生严重错误: {e}", exc_info=True)
         rag_chain = None
         return False
-
-
 
 #  LangChain Agent 的 MCP 工具封装 
 # 这里是对mcp格式的langchain翻译，翻译成一个类
@@ -780,96 +754,6 @@ NODE_DESCRIPTIONS = {
     "normal_chat": "普通对话",
     "inquiry_answer": "基于报告回答问题"
 }
-## 使用流式传输，暂时弃用该函数，采用ai_call_stream函数
-# async def ai_call(text, user_id, username, session_id):
-#     """
-#     使用我们模块化的 LangGraph agent 来处理用户请求。
-#     支持中断和恢复机制（基于checkpointer，无需全局状态）。
-#     """
-#     logging.info(f"处理用户 {username} 的消息，会话ID: {session_id}")
-    
-#     # 配置：使用 session_id 作为 thread_id，让 Checkpointer 自动管理状态
-#     config = {
-#         "configurable": {
-#             "thread_id": session_id,
-#             "user_id": user_id
-#         }
-#     }
-    
-#     # 检查当前状态，判断是否是恢复中断的会话
-#     # LangGraph会通过checkpointer自动检测interrupt状态
-#     try:
-#         state = await agent_graph.aget_state(config)
-#         # 如果next为空且tasks不为空，说明有pending interrupt
-#         is_interrupted = state.next == () and state.tasks
-        
-#         if is_interrupted:
-#             logging.info(f"检测到会话 {session_id} 处于中断状态，使用Command(resume=...)恢复")
-#             # 使用 Command(resume=...) 恢复执行，传入用户输入
-#             input_data = Command(resume=text)
-#         else:
-#             logging.info(f"正常对话或第一次对话")
-#             # 构建输入（只需要新消息，历史由 Checkpointer 管理）
-#             input_data = {
-#                 "messages": [HumanMessage(content=text)],
-#                 "user_id": user_id,
-#                 "username": username,
-#                 "session_id": session_id
-#             }
-#     except Exception as e:
-#         logging.warning(f"无法获取状态，假设为新对话: {e}")
-#         input_data = {
-#             "messages": [HumanMessage(content=text)],
-#             "user_id": user_id,
-#             "username": username,
-#             "session_id": session_id
-#         }
-    
-#     #  执行图 
-#     try:
-#         final_state_data = None
-#         interrupt_info = None
-        
-#         # 使用 astream 流式执行，可以捕获 interrupt 事件
-#         async for event in agent_graph.astream(input_data, config, stream_mode="values"):
-#             logging.info(f"收到事件: {list(event.keys())}")
-            
-#             # 检查是否遇到 interrupt
-#             if "__interrupt__" in event:
-#                 interrupt_info = event["__interrupt__"]
-#                 logging.info(f"检测到 interrupt: {interrupt_info}")
-#                 final_state_data = event  # 保存包含interrupt的状态
-#                 break
-            
-#             # 收集正常的状态更新
-#             if isinstance(event, dict) and event:
-#                 final_state_data = event
-        
-#         if interrupt_info:
-#             # 提取 interrupt 传递的问题
-#             # interrupt_info 是一个列表，包含Interrupt对象
-#             interrupt_obj = interrupt_info[0] if isinstance(interrupt_info, (list, tuple)) else interrupt_info
-            
-#             # Interrupt 对象有 value 属性，包含实际的问题文本
-#             question = interrupt_obj.value if hasattr(interrupt_obj, 'value') else str(interrupt_obj)
-            
-#             # 注意：不需要全局状态，checkpointer会自动管理
-#             logging.info(f"图已暂停，等待用户输入。问题: {question}")
-#             return {
-#                 "type": "human_input_required",
-#                 "summary": question
-#             }
-        
-#         if final_state_data:
-#             return process_final_result(final_state_data)
-#         else:
-#             # 如果没有收集到状态，直接获取最终状态
-#             final_state_data = await agent_graph.aget_state(config)
-#             return process_final_result(final_state_data.values)
-            
-#     except Exception as e:
-#         logging.error(f"执行 LangGraph Agent 时发生错误: {e}", exc_info=True)
-#         return {"type": "text", "summary": f"处理请求时出现错误: {e}"}
 
 async def ai_call_stream(text, user_id, username, session_id):
     """
@@ -1084,6 +968,20 @@ def process_final_result(final_state_data):
     logging.warning("未找到任何可返回的内容，返回默认消息")
     return {"type": "text", "summary": "抱歉，我在处理时遇到了问题。"}
 
+@app.route('/api/new_chat',methods=['POST'])
+def new_chat():
+    from flask import session
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'error': '用户未登录'}), 401
+    
+    user_id = session['user_id']
+    username = session.get('username', '未知用户')
+    new_session_id = str(uuid.uuid4())
+
+    # 核心修改：不再立即创建数据库记录，只生成session_id
+    # 会话记录将在用户发送第一条消息时通过 save_chat() 函数创建
+    logging.info(f"用户 {username} (ID: {user_id}) 生成新会话ID: {new_session_id} ")
+    return jsonify({'success': True, 'new_session_id': new_session_id})
 
 ## 保存历史文件     
 def save_chat(user_id, session_id, user_msg, ai_response):
@@ -1182,7 +1080,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
                     logging.info(f"成功保存附件: {attachment['type']}")
             
 
-            # 修改：根据是否为第一条消息，决定是否更新标题
+            # 根据是否为第一条消息，决定是否更新标题
             if is_first_message:
                 #  更新会话，包括新标题（或确认创建时的标题）
                 new_title = user_msg[:8] # 截取前8个字符作为标题
