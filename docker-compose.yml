@@ -79,8 +79,8 @@ services:
       - /app/__pycache__
       - /app/杂项
 
-      - ./models:/app/models:ro 
-      - ./knowledge_base/db:/app/knowledge_base/db
+      - ./Agent/knowledge_base/models:/app/Agent/knowledge_base/models:ro 
+      - ./Agent/knowledge_base/db:/app/Agent/knowledge_base/db
       - ./static/generated_graphs:/app/static/generated_graphs
       # 原因：
       # - 知识库数据和生成的图表需要持久化
