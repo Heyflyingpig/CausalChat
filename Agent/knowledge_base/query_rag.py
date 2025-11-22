@@ -8,8 +8,8 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain_huggingface import HuggingFaceEmbeddings
 from pandas.core.dtypes.dtypes import str_type
 from typing import List
+from config.settings import settings
 
-# --- 跨平台路径和配置加载 ---
 base_dir = os.path.dirname(os.path.abspath(__file__))
 # 返回到项目根目录
 project_root = os.path.dirname(base_dir) 
@@ -17,26 +17,11 @@ MODEL_PATH = os.path.join(base_dir, "models", "bge-small-zh-v1.5")
 SECRETS_PATH = os.path.join(project_root, "secrets.json")
 PERSIST_DIRECTORY = os.path.join(base_dir, "db")
 
-def load_secrets():
-    """从根目录的secrets.json加载LLM配置"""
-    try:
-        with open(SECRETS_PATH, 'r', encoding='utf-8') as f:
-            secrets = json.load(f)
-        return secrets
-    except FileNotFoundError:
-        print(f"错误: secrets.json 文件未在 {SECRETS_PATH} 找到。")
-        exit()
-    except json.JSONDecodeError:
-        print(f"错误: secrets.json 文件格式不正确。")
-        exit()
 
-# --- 初始化模型和数据库 ---
-# 1. 加载LLM配置
-secrets = load_secrets()
 llm = ChatOpenAI(
-    api_key=secrets.get("API_KEY"),
-    base_url=secrets.get("BASE_URL"),
-    model_name=secrets.get("MODEL"), 
+    api_key=settings.API_KEY,
+    base_url=settings.BASE_URL,
+    model_name=settings.MODEL, 
 )
 
 # 2. 加载与构建时相同的本地Embedding模型

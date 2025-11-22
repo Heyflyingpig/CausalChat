@@ -2,20 +2,21 @@ import os
 import logging
 import sys
 
-# --- Path fix: Add project root to sys.path ---
-# This ensures that the 'causal' module can be found when this script is run as a subprocess.
-MCP_SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(MCP_SERVER_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-# --- End of path fix ---
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))      # .../Agent/CausalChatMCP
+AGENT_DIR = os.path.dirname(CURRENT_DIR)                      # .../Agent
+PROJECT_ROOT = os.path.dirname(AGENT_DIR)                     # 项目根目录
+
+for p in (PROJECT_ROOT, AGENT_DIR):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 
 import json
 from mcp.server.fastmcp import FastMCP
-from causal.causalachieve import run_pc_analysis
+from Agent.causal.causalachieve import run_pc_analysis
 
-# --- 配置日志记录到文件 ---
-log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcp_server.log')
+
+log_file_path = os.path.join(CURRENT_DIR, 'mcp_server.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -26,7 +27,6 @@ logging.basicConfig(
 logging.info("--- MCP Server Script Started, Logging Initialized ---")
 
 
-# --- MCP 服务器和工具定义 ---
 mcp = FastMCP("causal-analyzer")
 
 @mcp.tool()

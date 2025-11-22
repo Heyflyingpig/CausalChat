@@ -3,7 +3,7 @@
 """
 from langgraph.func import task
 import logging
-from knowledge_base.query_rag import get_rag_response
+from Agent.knowledge_base.query_rag import get_rag_response
 from typing import List, Dict
 
 @task

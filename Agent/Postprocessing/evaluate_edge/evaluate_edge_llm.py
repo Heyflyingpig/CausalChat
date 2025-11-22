@@ -2,11 +2,11 @@ from pydantic import BaseModel, Field
 from typing import List, Tuple, Literal, Dict
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from causal_agent.state import CausalChatState
+from Agent.causal_agent.state import CausalChatState
 import json
 import logging
 
-from causal_agent.back_prompt import evaluate_edge_prompt
+from Agent.causal_agent.back_prompt import evaluate_edge_prompt
 
 class EdgeEvaluation(BaseModel):
     """LLM对边的评估结果。"""

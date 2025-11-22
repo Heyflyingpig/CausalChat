@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field
 from typing import List
 import logging
 import json
-from causal_agent.state import CausalChatState
-from causal_agent.back_prompt import causal_rag_prompt
+from Agent.causal_agent.state import CausalChatState
+from Agent.causal_agent.back_prompt import causal_rag_prompt
 from langchain_openai import ChatOpenAI
 
 

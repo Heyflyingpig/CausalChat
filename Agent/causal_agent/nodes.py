@@ -20,18 +20,18 @@ from config.settings import settings
 
 ## 导入人设
 ## 因果分析人设
-from causal_agent.back_prompt import causal_prompt
+from .back_prompt import causal_prompt
 ## 数据分析人设
-from causal_agent.back_prompt import data_prompt
+from .back_prompt import data_prompt
 ## 知识库查询人设
-from causal_agent.back_prompt import causal_rag_prompt
+from .back_prompt import causal_rag_prompt
 ## 报告人设
-from causal_agent.back_prompt import causal_report_prompt
+from .back_prompt import causal_report_prompt
 
 # 数据库
 from Database.agent_connect import get_file_content, get_recent_file
 # 处理llm的输出，提取json对象
-from tool_node.excute_output import excute_output
+from Agent.tool_node.excute_output import excute_output
 
 class RouteQuery(BaseModel):
     """定义Agent决策的选项。"""
@@ -139,10 +139,10 @@ class foldQuery(BaseModel):
     )
 
 ## fold节点用到的函数
-from Processing.fold_processing import get_data_summary
-from Processing.fold_verify import validate_analysis
-from Processing.data_visualize import generate_visualizations
-from knowledge_base.query_rag import get_rag_response
+from Agent.Processing.fold_processing import get_data_summary
+from Agent.Processing.fold_verify import validate_analysis
+from Agent.Processing.data_visualize import generate_visualizations
+from Agent.knowledge_base.query_rag import get_rag_response
 
 
 def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
@@ -424,9 +424,9 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     }
 
 
-from tool_node.causal_analysis_task import causal_analysis_task
-from tool_node.rag_query_task import rag_query_task
-from tool_node.rag_questions import get_rag_questions
+from Agent.tool_node.causal_analysis_task import causal_analysis_task
+from Agent.tool_node.rag_query_task import rag_query_task
+from Agent.tool_node.rag_questions import get_rag_questions
 
 
 def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: ChatOpenAI) -> dict:
@@ -493,12 +493,12 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
 
 
 # 环路检测模块
-from Postprocessing.cycles_check.detect_cycles import detect_cycles
-from Postprocessing.cycles_check.extract_causal_return import extract_adjacency_matrix
-from Postprocessing.cycles_check.fix_cycles import fix_cycles_with_llm
+from Agent.Postprocessing.cycles_check.detect_cycles import detect_cycles
+from Agent.Postprocessing.cycles_check.extract_causal_return import extract_adjacency_matrix
+from Agent.Postprocessing.cycles_check.fix_cycles import fix_cycles_with_llm
 
 # 边评估模块
-from Postprocessing.evaluate_edge.evaluate_edge_llm import evaluate_edges_with_llm
+from Agent.Postprocessing.evaluate_edge.evaluate_edge_llm import evaluate_edges_with_llm
 
 def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
@@ -618,7 +618,7 @@ def postprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         }
 
 ## 调用元数据
-from Report.Metadata_sum import metadata_summary, metadata_mapping
+from Agent.Report.Metadata_sum import metadata_summary, metadata_mapping
 def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     """
     报告模块：

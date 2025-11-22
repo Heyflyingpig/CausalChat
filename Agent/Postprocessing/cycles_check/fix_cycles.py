@@ -3,7 +3,7 @@ from typing import List
 import numpy as np
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from causal_agent.state import CausalChatState
+from Agent.causal_agent.state import CausalChatState
 import json
 import logging
 
