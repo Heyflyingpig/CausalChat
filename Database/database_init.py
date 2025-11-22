@@ -2,12 +2,6 @@
 """
 优化的数据库初始化脚本
 采用会话表分离、数据分层存储的设计，适合大规模数据场景
-主要改进：
-1. 新增 sessions 表管理会话元数据
-2. chat_messages 表优化，移除冗余数据
-3. 新增 chat_attachments 表存储大型结构化数据
-4. 优化索引策略
-5. 支持数据归档机制
 """
 
 import mysql.connector
@@ -194,7 +188,7 @@ class OptimizedDatabaseInitializer:
         logging.info("用户表 'users' 已检查/创建")
     
     def _create_sessions_table(self, cursor):
-        """创建会话表 - 新增表，用于管理会话元数据"""
+        """创建会话表，用于管理会话元数据"""
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id VARCHAR(36) PRIMARY KEY COMMENT 'UUID格式的会话ID',
@@ -253,6 +247,7 @@ class OptimizedDatabaseInitializer:
     def _create_chat_attachments_table(self, cursor):
         """创建聊天附件表 - 用于存储大型结构化数据"""
         # 注意：由于chat_messages是分区表，不能创建外键约束
+        # 注意，attachment的附件多了visualization，具体请看almebic
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_attachments (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -484,8 +479,7 @@ class OptimizedDatabaseInitializer:
 
 def main():
     """主函数 - 命令行入口"""
-    print("CausalChat 优化数据库初始化工具")
-    print("=" * 50)
+    print("CausalChat 数据库初始化工具")
     
     try:
         # 创建初始化器实例
@@ -493,7 +487,7 @@ def main():
         
         # 询问是否创建维护存储过程
         create_procedures = True
-        user_input = input("\n是否创建数据库？(Y/n): ").strip().lower()
+        user_input = input("\n是否创建数据库维护存储过程？(Y/n): ").strip().lower()
         if user_input in ['n', 'no']:
             create_procedures = False
         
@@ -512,7 +506,7 @@ def main():
         print("\n用户中断了初始化过程")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ 初始化过程中发生错误: {e}")
+        print(f"\n初始化过程中发生错误: {e}")
         print("请检查日志文件 database_init.log 获取详细信息。")
         sys.exit(1)
 
