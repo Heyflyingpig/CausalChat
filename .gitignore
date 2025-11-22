@@ -192,6 +192,6 @@ test.py
 causalcopliot/
 
 #knowledge
-knowledge_base/db/
-knowledge_base/source/
-knowledge_base/unfinish_source/
+Agent/knowledge_base/db/
+Agent/knowledge_base/source/
+Agent/knowledge_base/unfinish_source/
