@@ -29,7 +29,7 @@ from langchain.schema.output_parser import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from Report.Metadata_sum import replace_placeholders
-
+from flask import session
 try:
     from config.settings import settings
 except (ValueError, FileNotFoundError) as e:
@@ -320,8 +320,7 @@ def handle_login():
     处理用户登录请求。
     接收前端通过HTTPS发送的明文密码，使用bcrypt进行验证。
     """
-    #  重构：使用 Flask Session 进行会话管理 
-    from flask import session
+
 
     data = request.json
     username = data.get('username')
@@ -355,8 +354,7 @@ def handle_login():
 # 登出
 @app.route('/api/logout', methods=['POST'])
 def handle_logout():
-    #  重构：使用 Flask Session 
-    from flask import session
+
     
     # 从会话中获取用户名用于日志记录
     username = session.get('username', '未知用户')
@@ -371,8 +369,7 @@ def handle_logout():
 @app.route('/api/check_auth', methods=['GET'])
 def check_auth():
     """检查当前后端记录的登录状态"""
-    #  检查 Flask Session 
-    from flask import session
+
     if 'user_id' in session and 'username' in session:
         username = session['username']
         logging.debug(f"检查认证状态：用户 '{username}' (通过会话) 已登录")
@@ -446,40 +443,6 @@ def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Eve
     logging.info("后台事件循环已启动，MCP 初始化任务已安排。")
     loop.run_forever()
 
-
-# 获取发送的各种值
-# 暂时闲置，未来可能使用
-# @app.route('/api/send', methods=['POST'])
-# def handle_message():
-#     from flask import session
-#     if 'user_id' not in session or 'username' not in session:
-#         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
-    
-#     user_id = session['user_id']
-#     username = session['username']
-#     # --
-
-#     data = request.json
-#     user_input = data.get('message', '')
-#     session_id = data.get('session_id') # < 从前端获取会话ID
-
-#     if not session_id:
-#         logging.error(f"用户 {username} (ID: {user_id}) 发送消息时缺少 session_id")
-#         return jsonify({'success': False, 'error': '请求无效，缺少会话ID'}), 400
-
-#     logging.info(f"用户 {username} (ID: {user_id}) 在会话 {session_id} 中发送消息: {user_input[:50]}...")
-
-#     try:
-#         # 等待异步操作完成
-#         future = asyncio.run_coroutine_threadsafe(ai_call(user_input, user_id, username, session_id), background_loop)
-#         response = future.result()  # 这会阻塞当前线程直到异步任务完成
-
-#         #  核心修改：显式传递 session_id，不再使用全局变量 
-#         save_chat(user_id, session_id, user_input, response)
-#         return jsonify({'success': True, 'response': response})
-#     except Exception as e:
-#         logging.error(f"处理用户 {username} (ID: {user_id}) 消息时出错: {e}", exc_info=True)
-#         return jsonify({'success': False, 'error': f'处理消息时出错: {e}'}), 500
 
 @app.route('/api/send_stream', methods=['POST'])
 def handle_message_stream():
@@ -970,7 +933,6 @@ def process_final_result(final_state_data):
 
 @app.route('/api/new_chat',methods=['POST'])
 def new_chat():
-    from flask import session
     if 'user_id' not in session:
         return jsonify({'success': False, 'error': '用户未登录'}), 401
     
@@ -1110,7 +1072,6 @@ def save_chat(user_id, session_id, user_msg, ai_response):
 # 会话管理接口,获取会话
 @app.route('/api/sessions')
 def get_sessions():
-    from flask import session
     if 'user_id' not in session:
         return jsonify({"error": "用户未登录或会话已过期"}), 401
     
@@ -1155,7 +1116,6 @@ def get_sessions():
 @app.route('/api/files')
 # 获取文件列表
 def get_file_list():
-    from flask import session
     if 'user_id' not in session:
         return jsonify({"error": "用户未登录或会话已过期"}), 401
     
@@ -1188,10 +1148,9 @@ def get_file_list():
     return jsonify(file_list_for_frontend)
 
 
-# 加载特定会话内容 (**修改：** 增加用户验证)
+# 加载特定会话内容 
 @app.route('/api/load_session')
 def load_session_content():
-    from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
@@ -1210,7 +1169,7 @@ def load_session_content():
         with get_db_connection() as conn:
             cursor = conn.cursor(dictionary=True)
 
-            #  核心修改：处理延迟创建的session
+            # 处理延迟创建的session
             # 首先检查session是否存在
             cursor.execute("SELECT id FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
             session_exists = cursor.fetchone()
@@ -1290,12 +1249,9 @@ def load_session_content():
         logging.error(f"加载会话 {session_id} (用户 {username}) 时发生未知错误: {e}")
         return jsonify({"success": False, "error": f"加载会话时出错: {e}"}), 500
  
-
-
 @app.route('/api/change_session', methods=['POST'])
 def change_session():
     #  用户认证检查 
-    from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
@@ -1311,7 +1267,7 @@ def change_session():
 
     try:
         with get_db_connection() as conn:
-            #  修改：增加 user_id 条件以确保安全，并处理延迟创建的session 
+            #  增加 user_id 条件以确保安全，并处理延迟创建的session 
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE sessions SET title = %s WHERE id = %s AND user_id = %s",
@@ -1319,7 +1275,7 @@ def change_session():
             )
             conn.commit()
             
-            #  修改：更详细的错误处理，区分延迟创建的session 
+            #  更详细的错误处理，区分延迟创建的session 
             if cursor.rowcount == 0:
                 # 检查session是否因为延迟创建而不存在
                 cursor.execute("SELECT 1 FROM chat_messages WHERE session_id = %s AND user_id = %s LIMIT 1", (session_id, user_id))
@@ -1343,7 +1299,6 @@ def change_session():
 @app.route('/api/delete_session', methods=['POST'])
 def delete_session():
     #  核心修改：安全和完整的删除逻辑，支持延迟创建 
-    from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
@@ -1419,7 +1374,6 @@ def delete_session():
 
 @app.route('/api/delete_file', methods=['POST'])
 def delete_file():
-    from flask import session
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
@@ -1477,7 +1431,6 @@ def setting():
 @app.route('/api/upload_file', methods=['POST'])
 def upload_file():
     #  重构：从 Session 获取用户身份 
-    from flask import session
     if 'user_id' not in session:
         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
     
