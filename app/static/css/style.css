@@ -884,6 +884,7 @@
     border: none;
     padding: 0;
     margin-bottom: 15px;
+    margin-left: 20px;
     max-width: 80%;
     align-self: flex-start;
     /* 添加平滑的展开/收起动画 */
@@ -891,6 +892,7 @@
     opacity: 1;
     transform: scaleY(1);
     transform-origin: top;
+    
 }
 
 /* 隐藏时的动画效果（虽然使用display控制，但可以在JS中配合使用） */
