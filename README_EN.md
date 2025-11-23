@@ -37,6 +37,7 @@ CausalChat
 
 ## Table of Contents
 
+- [Table of Contents](#table-of-contents)
 - [What is CausalChat](#what-is-causalchat)
 - [Why CausalChat](#why-causalchat)
 - [Tech Stack](#tech-stack)
@@ -52,6 +53,7 @@ CausalChat
   - [Windows Deployment](#windows-deployment)
 - [Contributing](#contributing)
 - [Project Structure](#project-structure)
+- [Star History](#star-history)
 - [Changelog](#changelog)
 
 ## What is CausalChat
@@ -216,6 +218,10 @@ Contributions via Issues and Pull Requests are welcome.
 ├── setting/                # User-facing docs
 └── openspec/               # Internal project specs
 ```
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalChat&type=Date)](https://star-history.com/#Heyflyingpig/CausalChat&Date)
 
 ## Changelog
 

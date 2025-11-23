@@ -57,6 +57,7 @@ CausalChat
   - [Docker部署](#docker部署)
   - [windows部署](#windows部署)
 - [贡献](#贡献)
+- [Star 趋势](#star-趋势)
 - [项目结构](#项目结构)
 - [更新日志](#更新日志)
 
@@ -332,6 +333,11 @@ python Run_causal.py
 3. 提交代码
 
 4. 新建 Pull Request
+   
+## Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalChat&type=Date)](https://star-history.com/#Heyflyingpig/CausalChat&Date)
+
 
 ## 项目结构
 
