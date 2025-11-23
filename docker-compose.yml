@@ -81,7 +81,6 @@ services:
 
       - ./Agent/knowledge_base/models:/app/Agent/knowledge_base/models:ro 
       - ./Agent/knowledge_base/db:/app/Agent/knowledge_base/db
-      - ./static/generated_graphs:/app/static/generated_graphs
       # 原因：
       # - 知识库数据和生成的图表需要持久化
       # - 容器重建后这些数据不应该丢失
