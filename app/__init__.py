@@ -10,10 +10,9 @@ from app.files.routes import files_bp
 from app.agent.routes import agent_bp
 from app.main.routes import main_bp
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def create_app():
-    app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"))
+    app = Flask(__name__, static_folder="static")
     app.secret_key = settings.SECRET_KEY
 
     try:

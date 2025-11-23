@@ -37,4 +37,4 @@ def setting():
 @main_bp.route('/')
 def index():
     # 总是返回 chat.html，由前端 JS 决定显示登录还是主界面
-    return send_from_directory(os.path.join(BASE_DIR, "static"), 'chat.html')
+    return send_from_directory("static", 'chat.html')
