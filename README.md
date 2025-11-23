@@ -1,3 +1,6 @@
+[简体中文](README.md) | [English](README_EN.md)
+
+
 <p align="center">
 <img src="./readme_img/causalchat.png" alt="Logo">
 </p>
