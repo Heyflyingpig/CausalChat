@@ -445,8 +445,8 @@ def execute_tools_node(state: CausalChatState, mcp_session: ClientSession, llm: 
     logging.info(" 开始并行执行因果分析和RAG查询 ")
 
     rag_question_task = get_rag_questions(state, llm, num_questions=2)
-    
-    causal_task = causal_analysis_task(file_content, mcp_session)
+
+    causal_task = causal_analysis_task(file_content, mcp_session, llm, state)
 
     rag_questions = rag_question_task.result()
 
