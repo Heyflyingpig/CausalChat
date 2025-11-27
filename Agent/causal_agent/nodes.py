@@ -630,6 +630,7 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     system_prompt_template = (
         """
          system role: {system_role}
+         #输出语言：**请用英文回复**
          
          你的任务是根据用户的对话历史和当前状态，按照要求的报告格式生成一份综合的，完整的因果领域报告
          # 当前状态摘要

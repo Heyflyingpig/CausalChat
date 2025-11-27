@@ -16,11 +16,159 @@ const backToSettingsButton = document.getElementById('backToSettingsButton'); //
 const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上传器
 const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上传按钮
 const chatArea = document.getElementById('chatArea');
-//全局变量存储当前会话的用户名 
+//全局变量存储当前会话的用户名
 let currentUsername = null;
 let currentSessionId = null; // < 全局变量跟踪当前会话ID
 let isNewSessionPendingDisplay = false; //  用于跟踪新会话是否已在UI中临时显示
 let chatEventListenersAttached = false; // 跟踪事件监听器是否已附加
+let currentLanguage = localStorage.getItem('language') || 'zh'; // 当前语言，默认中文，从localStorage读取
+
+// 多语言文本配置
+const i18n = {
+    zh: {
+        // 登录/注册页面
+        login: '登录',
+        register: '注册',
+        username: '用户名:',
+        password: '密码:',
+        confirmPassword: '确认密码:',
+        loginBtn: '登录',
+        registerBtn: '注册',
+        noAccountRegister: '还没有账号？点击注册',
+        hasAccountLogin: '已有账号？点击登录',
+        // 用户信息弹窗
+        userInfo: '用户信息',
+        logout: '退出登录',
+        close: '关闭',
+        // 设置弹窗
+        settings: '设置',
+        userAgreement: '用户协议',
+        userManual: '操作文档',
+        checkUpdate: '检查更新',
+        toggleLanguage: '切换英文',
+        back: '返回',
+        // 侧边栏
+        newChat: '新建对话',
+        fileList: '文件列表',
+        // 输入区域
+        inputPlaceholder: '输入消息...',
+        upload: '上传',
+        send: '发送',
+        // 动态消息
+        accountPrefix: '账号: ',
+        noHistoryMessage: '还没有任何对话记录。',
+        noFilesMessage: '还没有任何文件记录。',
+        pleaseLoginHistory: '请先登录以查看历史记录。',
+        pleaseLoginFiles: '请先登录以查看文件列表。',
+        sessionExpired: '会话已过期，请重新登录。',
+        justNow: '刚刚',
+        deleteBtn: '删除',
+        thinking: '正在思考...',
+        thinkingWait: '请稍等...',
+        inProgress: '进行中...',
+        newChatGreeting: '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析',
+        uploading: '上传中...',
+        uploadingFile: '正在上传文件: ',
+        fileReceived: '已接收您的文件：',
+        askCausalAnalysis: '\n\n您现在可以询问我对此文件进行因果分析。',
+        uploadFailed: '文件上传失败：',
+        networkError: '文件上传时发生网络错误，请检查网络连接后重试。',
+        versionUpdated: '版本已经更新到最新',
+        loadingContent: '正在加载内容...',
+        loadFailed: '加载内容失败: ',
+        loadError: '加载内容时出错: '
+    },
+    en: {
+        // Login/Register page
+        login: 'Login',
+        register: 'Register',
+        username: 'Username:',
+        password: 'Password:',
+        confirmPassword: 'Confirm Password:',
+        loginBtn: 'Login',
+        registerBtn: 'Register',
+        noAccountRegister: "Don't have an account? Register",
+        hasAccountLogin: 'Already have an account? Login',
+        // User info popup
+        userInfo: 'User Info',
+        logout: 'Logout',
+        close: 'Close',
+        // Settings popup
+        settings: 'Settings',
+        userAgreement: 'User Agreement',
+        userManual: 'User Manual',
+        checkUpdate: 'Check Update',
+        toggleLanguage: 'Switch to Chinese',
+        back: 'Back',
+        // Sidebar
+        newChat: 'New Chat',
+        fileList: 'File List',
+        // Input area
+        inputPlaceholder: 'Type a message...',
+        upload: 'Upload',
+        send: 'Send',
+        // Dynamic messages
+        accountPrefix: 'Account: ',
+        noHistoryMessage: 'No conversation history yet.',
+        noFilesMessage: 'No files yet.',
+        pleaseLoginHistory: 'Please login to view history.',
+        pleaseLoginFiles: 'Please login to view files.',
+        sessionExpired: 'Session expired, please login again.',
+        justNow: 'Just now',
+        deleteBtn: 'Delete',
+        thinking: 'Thinking...',
+        thinkingWait: 'please wait...',
+        inProgress: 'In progress...',
+        newChatGreeting: 'Hello! This is a new conversation. What would you like to talk about? You can upload a causal data file for analysis.',
+        uploading: 'Uploading...',
+        uploadingFile: 'Uploading file: ',
+        fileReceived: 'File received: ',
+        askCausalAnalysis: '\n\nYou can now ask me to perform causal analysis on this file.',
+        uploadFailed: 'File upload failed: ',
+        networkError: 'Network error during file upload. Please check your connection and try again.',
+        versionUpdated: 'Version is up to date',
+        loadingContent: 'Loading content...',
+        loadFailed: 'Failed to load content: ',
+        loadError: 'Error loading content: '
+    }
+};
+
+// 获取当前语言的文本
+function getText(key) {
+    return i18n[currentLanguage][key] || i18n['zh'][key] || key;
+}
+
+// 应用语言到所有带有 data-i18n 属性的元素
+function applyLanguage() {
+    // 更新所有带有 data-i18n 属性的元素的文本内容
+    document.querySelectorAll('[data-i18n]').forEach(element => {
+        const key = element.getAttribute('data-i18n');
+        if (i18n[currentLanguage][key]) {
+            element.textContent = i18n[currentLanguage][key];
+        }
+    });
+
+    // 更新所有带有 data-i18n-placeholder 属性的元素的 placeholder
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(element => {
+        const key = element.getAttribute('data-i18n-placeholder');
+        if (i18n[currentLanguage][key]) {
+            element.placeholder = i18n[currentLanguage][key];
+        }
+    });
+
+    // 更新用户信息弹窗内容（如果用户已登录）
+    if (currentUsername) {
+        userInfoContent.textContent = getText('accountPrefix') + currentUsername;
+    }
+}
+
+// 切换语言
+function toggleLanguage() {
+    currentLanguage = currentLanguage === 'zh' ? 'en' : 'zh';
+    localStorage.setItem('language', currentLanguage); // 保存到 localStorage
+    applyLanguage();
+    console.log(`语言已切换为: ${currentLanguage === 'zh' ? '中文' : 'English'}`);
+}
 
 // 切换登录和注册表单
 function toggleAuthForms() {
@@ -208,11 +356,11 @@ async function checkLoginStatus() {
     }
 }
 
-// 更新用户界面信息（例如头像区域） - 
+// 更新用户界面信息（例如头像区域） -
 function updateUserInfo() {
     if (currentUsername) { // : 使用全局变量
         userAvatar.textContent = currentUsername.charAt(0).toUpperCase(); // 显示用户名首字母
-        userInfoContent.textContent = `账号: ${currentUsername}`; // 设置弹窗内容
+        userInfoContent.textContent = getText('accountPrefix') + currentUsername; // 设置弹窗内容，使用多语言
     } else {
         userAvatar.textContent = ''; // 未登录则清空
         userInfoContent.textContent = ''; // 清空弹窗内容
@@ -262,34 +410,40 @@ function hideSettingPopup() {
 async function handleSettingOption(optionId) {
     console.log(`点击了设置选项: ${optionId}`);
 
+    // 处理语言切换 - 不需要显示内容区域，直接切换语言
+    if (optionId === 'toggleLanguage') {
+        toggleLanguage();
+        return; // 直接结束函数
+    }
+
     settingOptions.style.display = 'none'; // 修正：隐藏选项列表容器
     settingContentDisplay.style.display = 'block'; // 显示内容区域
     backToSettingsButton.style.display = 'inline-block'; // 显示返回按钮
 
-    settingContentDisplay.innerHTML = '<p>正在加载内容...</p>'; // 显示加载提示
+    settingContentDisplay.innerHTML = `<p>${getText('loadingContent')}</p>`; // 显示加载提示
 
     if (optionId === 'checkUpdate') {
-    settingContentDisplay.innerHTML = '<p>版本已经更新到最新</p>'; // 显示提示信息
-    return; // 直接结束函数，不执行后续的 fetch
-}
+        settingContentDisplay.innerHTML = `<p>${getText('versionUpdated')}</p>`; // 显示提示信息
+        return; // 直接结束函数，不执行后续的 fetch
+    }
     try {
         const response = await fetch(`/api/setting?topic=${encodeURIComponent(optionId)}`); // 不需要区分选项，直接调用
         const data = await response.json();
 
         if (data.success && data.messages) {
             console.log("成功获取设置内容");
-            
+
             settingContentDisplay.innerHTML = marked.parse(data.messages);
 
         } else {
             console.error("获取设置内容失败:", data.error);
             // 显示错误信息
-            settingContentDisplay.innerHTML = `<p style="color: red;">加载内容失败: ${data.error || '未知错误'}</p>`;
+            settingContentDisplay.innerHTML = `<p style="color: red;">${getText('loadFailed')}${data.error || '未知错误'}</p>`;
         }
     } catch (error) {
         console.error("处理设置选项时出错:", error);
         // 显示网络或请求错误信息
-        settingContentDisplay.innerHTML = `<p style="color: red;">加载内容时出错: ${error.message}</p>`;
+        settingContentDisplay.innerHTML = `<p style="color: red;">${getText('loadError')}${error.message}</p>`;
     }
 }
 
@@ -373,6 +527,10 @@ function showSettingOptions() {
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
     console.log("DOM 已加载，检查登录状态...");
+
+    // 应用保存的语言设置
+    applyLanguage();
+
     checkLoginStatus();
     // 设置全局监听器，这些元素始终存在
     setupGlobalEventListeners();
@@ -518,7 +676,7 @@ function addThinkingMessage() {
     
     const text = document.createElement('span');
     text.className = 'thinking-text';
-    text.textContent = '正在思考...';
+    text.textContent = getText('thinking');
     
     const dots = document.createElement('span');
     dots.className = 'thinking-dots';
@@ -618,26 +776,26 @@ function handleNodeStart(eventData, thinkingElements) {
     // 更新简洁视图的文字（在 bubble 中）
     const thinkingText = thinkingElements.bubble.querySelector('.thinking-text');
     if (thinkingText) {
-        thinkingText.textContent = `正在${node_desc}，请稍等...`;
+        thinkingText.textContent = node_desc + getText('thinkingWait');
     }
-    
+
     // 在独立的详情面板中添加步骤项
     const detail = thinkingElements.detail;
     const stepItem = document.createElement('div');
     stepItem.className = 'step-item in-progress';
     stepItem.id = `step-${node_name}`;
-    
+
     const statusIcon = document.createElement('span');
     statusIcon.className = 'step-status';
     statusIcon.textContent = '▶';
-    
+
     const stepName = document.createElement('span');
     stepName.className = 'step-name';
     stepName.textContent = node_desc;
-    
+
     const stepTime = document.createElement('span');
     stepTime.className = 'step-time';
-    stepTime.textContent = '进行中...';
+    stepTime.textContent = getText('inProgress');
     
     stepItem.appendChild(statusIcon);
     stepItem.appendChild(stepName);
@@ -775,7 +933,7 @@ async function handleNewChatRequest() {
             console.log(`新会话已创建: ${currentSessionId}`);
             isNewSessionPendingDisplay = true; //  标记这个新会话等待用户输入后在UI显示
             
-            addMessage('ai', '你好！这是一个新的对话。你想聊些什么？你可以上传因果的数据文件，我将对该文件进行分析');
+            addMessage('ai', getText('newChatGreeting'));
             document.getElementById('userInput').focus();
 
             // 注意：此时不调用loadHistory，因为新会话还不在数据库里
@@ -933,7 +1091,7 @@ function addTemporarySessionToUI(sessionId, title) {
 
     const timeDiv = document.createElement('div');
     timeDiv.className = 'session-time';
-    timeDiv.textContent = '刚刚';
+    timeDiv.textContent = getText('justNow');
 
     const previewDiv = document.createElement('div');
     previewDiv.className = 'preview-text';
@@ -952,7 +1110,7 @@ function addTemporarySessionToUI(sessionId, title) {
 // 加载历史记录
 async function loadHistory() {
     if (!currentUsername) {
-        historyList.innerHTML = '<p class="history-empty-message">请先登录以查看历史记录。</p>';
+        historyList.innerHTML = `<p class="history-empty-message">${getText('pleaseLoginHistory')}</p>`;
         return;
     }
     console.log(`为用户 ${currentUsername} 加载历史会话...`);
@@ -962,18 +1120,18 @@ async function loadHistory() {
         if (!response.ok) {
             if (response.status === 401) {
                 // 如果是401未授权，可能是会话过期，可以提示用户重新登录
-                 historyList.innerHTML = '<p class="history-empty-message">会话已过期，请重新登录。</p>';
+                 historyList.innerHTML = `<p class="history-empty-message">${getText('sessionExpired')}</p>`;
                  handleLogout(); // 可以选择直接触发登出流程
                  return;
             }
             throw new Error(`服务器错误: ${response.status}`);
         }
         const sessions = await response.json();
-        
+
         historyList.innerHTML = ''; // 清空旧列表
 
         if (Object.keys(sessions).length === 0) {
-            historyList.innerHTML = '<p class="history-empty-message">还没有任何对话记录。</p>';
+            historyList.innerHTML = `<p class="history-empty-message">${getText('noHistoryMessage')}</p>`;
         } else {
             //  用于跟踪当前打开的滑动项 
             let currentlyOpenItem = null;
@@ -994,7 +1152,7 @@ async function loadHistory() {
 
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'delete-btn';
-                deleteBtn.textContent = '删除';
+                deleteBtn.textContent = getText('deleteBtn');
                 deleteBtn.onclick = (e) => {
                     e.stopPropagation();
                     handleDeleteSession(session_id, historyItem);
@@ -1157,7 +1315,7 @@ async function handleDeleteSession(sessionId, element) {
                 element.remove();
                 // 检查是否列表已空
                 if (historyList.children.length === 0) {
-                     historyList.innerHTML = '<p class="history-empty-message">还没有任何对话记录。</p>';
+                     historyList.innerHTML = `<p class="history-empty-message">${getText('noHistoryMessage')}</p>`;
                 }
             }, 300); // 匹配CSS过渡时间
         } else {
@@ -1231,12 +1389,12 @@ async function handleCsvFileSelect(event) {
         return;
     }
 
-    //  检查会话ID 
+    //  检查会话ID
     if (!currentSessionId) {
         showError("没有活动的会话，无法上传文件。请新建一个对话或加载历史会话。");
         // 恢复按钮状态
         if (uploadCsvButton) {
-            uploadCsvButton.textContent = '上传';
+            uploadCsvButton.textContent = getText('upload');
             uploadCsvButton.disabled = false;
         }
         event.target.value = null; // 清除文件选择
@@ -1245,7 +1403,7 @@ async function handleCsvFileSelect(event) {
     // -
 
     // 显示上传开始的用户消息和AI加载动画
-    addMessage('user', `正在上传文件: ${file.name}`);
+    addMessage('user', getText('uploadingFile') + file.name);
     const loadingMessageElement = addMessage('ai', '', true);
 
     const formData = new FormData();
@@ -1253,7 +1411,7 @@ async function handleCsvFileSelect(event) {
     formData.append('session_id', currentSessionId);
 
     if (uploadCsvButton) {
-        uploadCsvButton.textContent = '上传中...';
+        uploadCsvButton.textContent = getText('uploading');
         uploadCsvButton.disabled = true;
     }
 
@@ -1272,27 +1430,27 @@ async function handleCsvFileSelect(event) {
 
         if (data.success) {
             // 显示成功的AI回复消息
-            addMessage('ai', `已接收您的文件：${file.name}\n\n${data.message}\n\n您现在可以询问我对此文件进行因果分析。`);
+            addMessage('ai', getText('fileReceived') + file.name + '\n\n' + data.message + getText('askCausalAnalysis'));
             loadFiles(); //  刷新文件列表
         } else {
             // 显示错误的AI回复消息
-            addMessage('ai', `文件上传失败：${data.error || '未知错误'}`);
+            addMessage('ai', getText('uploadFailed') + (data.error || '未知错误'));
             showError(data.error || '文件上传失败。');
         }
     } catch (error) {
         console.error("CSV Upload error:", error);
-        
+
         // 移除加载动画
         if (loadingMessageElement && loadingMessageElement.parentNode) {
             loadingMessageElement.parentNode.removeChild(loadingMessageElement);
         }
-        
+
         // 显示网络错误的AI回复
-        addMessage('ai', '文件上传时发生网络错误，请检查网络连接后重试。');
+        addMessage('ai', getText('networkError'));
         showError('上传文件时发生网络错误。');
     } finally {
         if (uploadCsvButton) {
-            uploadCsvButton.textContent = '上传';
+            uploadCsvButton.textContent = getText('upload');
             uploadCsvButton.disabled = false;
         }
         event.target.value = null;
@@ -1465,10 +1623,10 @@ function addMessage(sender, messageData, isLoading = false) {
     return messageElement;
 }
 
-//  加载文件列表的函数 
+//  加载文件列表的函数
 async function loadFiles() {
     if (!currentUsername) {
-        if (fileList) fileList.innerHTML = '<p class="files-empty-message">请先登录以查看文件列表。</p>';
+        if (fileList) fileList.innerHTML = `<p class="files-empty-message">${getText('pleaseLoginFiles')}</p>`;
         return;
     }
     console.log(`为用户 ${currentUsername} 加载文件列表...`);
@@ -1478,17 +1636,17 @@ async function loadFiles() {
         const response = await fetch(`/api/files`);
         if (!response.ok) {
             if (response.status === 401) {
-                 fileList.innerHTML = '<p class="files-empty-message">会话已过期，请重新登录。</p>';
+                 fileList.innerHTML = `<p class="files-empty-message">${getText('sessionExpired')}</p>`;
                  return;
             }
             throw new Error(`服务器错误: ${response.status}`);
         }
         const files = await response.json();
-        
+
         fileList.innerHTML = ''; // 清空旧列表
 
         if (Object.keys(files).length === 0) {
-            fileList.innerHTML = '<p class="files-empty-message">还没有任何文件记录。</p>';
+            fileList.innerHTML = `<p class="files-empty-message">${getText('noFilesMessage')}</p>`;
         } else {
             let currentlyOpenFileItem = null;
 
@@ -1505,7 +1663,7 @@ async function loadFiles() {
 
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'delete-btn';
-                deleteBtn.textContent = '删除';
+                deleteBtn.textContent = getText('deleteBtn');
                 deleteBtn.onclick = (e) => {
                     e.stopPropagation();
                     handleDeleteFile(file_id, fileItem);
@@ -1641,7 +1799,7 @@ async function handleDeleteFile(fileId, element) {
             setTimeout(() => {
                 element.remove();
                 if (fileList.children.length === 0) {
-                     fileList.innerHTML = '<p class="files-empty-message">还没有任何文件记录。</p>';
+                     fileList.innerHTML = `<p class="files-empty-message">${getText('noFilesMessage')}</p>`;
                 }
             }, 300); // 匹配CSS过渡时间
         } else {

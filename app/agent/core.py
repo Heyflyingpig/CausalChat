@@ -40,14 +40,14 @@ rag_chain = None
 llm = None
 agent_graph = None
 NODE_DESCRIPTIONS = {
-    "agent": "路由决策 - 分析用户意图",
-    "fold": "加载文件 - 读取并验证数据",
-    "preprocess": "数据预处理 - 生成统计摘要和可视化",
-    "execute_tools": "执行分析 - 运行因果分析和知识库查询",
-    "postprocess": "后处理 - 环路检测和边评估",
-    "report": "生成报告 - 整合分析结果",
-    "normal_chat": "普通对话",
-    "inquiry_answer": "基于报告回答问题"
+    "agent": "Analyze user intent",
+    "fold": "Load file and validate data",
+    "preprocess": "Data preprocessing - generate summary and visualization",
+    "execute_tools": "Execute analysis - run causal analysis and knowledge base query",
+    "postprocess": "Postprocessing - loop detection and edge evaluation",
+    "report": "Generate report - integrate analysis results",
+    "normal_chat": "Normal chat",
+    "inquiry_answer": "Answer questions based on the report"
 }
 
 def initialize_llm():
