@@ -14,7 +14,6 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 # 返回到项目根目录
 project_root = os.path.dirname(base_dir) 
 MODEL_PATH = os.path.join(base_dir, "models", "bge-small-zh-v1.5")
-SECRETS_PATH = os.path.join(project_root, "secrets.json")
 PERSIST_DIRECTORY = os.path.join(base_dir, "db")
 
 
@@ -43,7 +42,6 @@ db = Chroma(
 # 检索器是专门用于根据查询查找相关文档的对象
 retriever = db.as_retriever(search_kwargs={"k": 3}) # 设置为返回最相关的3个结果
 
-# --- 构建RAG链 (LangChain Expression Language - LCEL) ---
 
 # 5. 定义我们的Prompt模板
 # 这个模板指导LLM如何利用我们提供的上下文来回答问题
