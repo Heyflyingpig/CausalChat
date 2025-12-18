@@ -155,7 +155,7 @@
     /* 伪元素 */
     .chat-area::before {
         /* 聊天区域的背景水印文字 */
-        content: 'CausalChat'; /* 水印显示的文字 */
+        content: 'CausalAgent'; /* 水印显示的文字 */
         position: absolute; /* 绝对定位，相对于.chat-area */
         top: 50%; /* 垂直居中 */
         left: 50%; /* 水平居中 */
