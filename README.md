@@ -2,11 +2,11 @@
 
 
 <p align="center">
-<img src="./readme_img/causalchat.png" alt="Logo">
+<img src="./readme_img/CausalAgent.png" alt="Logo">
 </p>
 
 <h1 align="center">
-CausalChat
+CausalAgent
 </h1>
 
 <p align="center">
@@ -32,18 +32,18 @@ CausalChat
 
   <p>
 
-*只需上传你的数据集，Causal-Chat 就能以对话的方式，自动帮你选用因果分析算法，并在生成可交互的对话面板和专业的分析报告。*
+*只需上传你的数据集，CausalAgent 就能以对话的方式，自动帮你选用因果分析算法，并在生成可交互的对话面板和专业的分析报告。*
 
 > [!IMPORTANT]
 > **项目开发中**
 > <br>
-> 目前 CausalChat 正在进行核心架构升级,我们正在努力完善功能，**请点击右上角 Star ⭐ 关注后续更新！**
+> 目前 CausalAgent 正在进行核心架构升级,我们正在努力完善功能，**请点击右上角 Star ⭐ 关注后续更新！**
 
 ## 目录
 
 - [目录](#目录)
-- [WHAT IS CausalChat](#what-is-causalchat)
-- [WHY CausalChat](#why-causalchat)
+- [WHAT IS CausalAgent](#what-is-causalagent)
+- [WHY CausalAgent](#why-causalagent)
 - [技术栈](#技术栈)
 - [展示](#展示)
 - [核心功能](#核心功能)
@@ -65,12 +65,12 @@ CausalChat
 
 
 
-## WHAT IS CausalChat
+## WHAT IS CausalAgent
 
-**新一代因果分析智能体**: CausalChat 是一个集成了AGENT的因果分析工具，它能够自动识别因果关系，生成专业的分析报告，并提供可交互的因果图谱。
+**新一代因果分析智能体**: CausalAgent 是一个集成了AGENT的因果分析工具，它能够自动识别因果关系，生成专业的分析报告，并提供可交互的因果图谱。
 **缩减因果分析门槛**：什么是因果？为什么需要因果分析？简单来说，[因果分析](https://zh.wikipedia.org/wiki/%E5%9B%A0%E6%9E%9C%E6%8E%A8%E6%96%B7)就是对真实世界数据进行逻辑分析。
 
-## WHY CausalChat
+## WHY CausalAgent
 
 | 特性 | 说明 |
 | :--- | :--- |
@@ -97,7 +97,7 @@ CausalChat
 
 ## 核心功能
 
-CausalChat 的整体因果分析流程可以抽象为：**用户上传数据 → 预处理与数据体检 → 因果结构学习 → 后处理与质量提升 → 报告与可视化输出**。下面按模块进行说明。
+CausalAgent 的整体因果分析流程可以抽象为：**用户上传数据 → 预处理与数据体检 → 因果结构学习 → 后处理与质量提升 → 报告与可视化输出**。下面按模块进行说明。
 
 ### Agent 总览
 ```mermaid
@@ -178,7 +178,7 @@ graph TD;
 
 1. 安装docker并且gitclone项目
 ```bash
-git clone https://github.com/Heyflyingpig/CausalChat
+git clone https://github.com/Heyflyingpig/CausalAgent
 ```
 
 2. 创建.env文件,并在文件中键入以下值
@@ -233,8 +233,8 @@ docker-compose up -d
 
 3. 克隆仓库: 输入以下命令并按回车：
 
-  git clone https://github.com/Heyflyingpig/CausalChat
-  这将在当前目录下创建一个名为 CausalChat 的文件夹，并下载所有项目文件。
+  git clone https://github.com/Heyflyingpig/CausalAgent
+  这将在当前目录下创建一个名为 CausalAgent 的文件夹，并下载所有项目文件。
 
 *备选方案：您也可以在 GitHub 页面上点击 "Code" -> "Download ZIP" 下载项目的压缩包，然后手动解压。*
 
@@ -304,7 +304,7 @@ alembic upgrade head
 在项目根目录下打开一个终端，运行以下命令：
 
 ```bash
-python Causalchat.py
+python CausalAgent.py
 ```
 
 首次运行时，程序会自动连接到你在 `secrets.json` 中配置的数据库，并创建所需的表结构。你会看到 Flask 开发服务器启动的日志，它正在 `http://127.0.0.1:5001` 上监听。**请保持此终端窗口持续运行。**
@@ -317,7 +317,7 @@ python Causalchat.py
 python Run_causal.py
 ```
 
-稍等片刻，一个标题为 "CausalChat" 的桌面应用窗口将会出现，并加载应用的登录界面。现在，你可以注册并开始使用了。
+稍等片刻，一个标题为 "CausalAgent" 的桌面应用窗口将会出现，并加载应用的登录界面。现在，你可以注册并开始使用了。
 
 11. rag和知识库部分
 > [!IMPORTANT]
@@ -336,14 +336,14 @@ python Run_causal.py
    
 ## Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalChat&type=Date)](https://star-history.com/#Heyflyingpig/CausalChat&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalAgent&type=Date)](https://star-history.com/#Heyflyingpig/CausalAgent&Date)
 
 
 ## 项目结构
 
 ```
 .
-├── Causalchat.py           # Flask 入口
+├── CausalAgent.py           # Flask 入口
 ├── Run_causal.py           # 桌面端启动入口（pywebview）
 ├── requirements.txt        # 完整依赖
 ├── requirements-base.txt   # 基础依赖（docker/生产使用）
@@ -580,7 +580,7 @@ python Run_causal.py
 ---
 2025.11.21
   - 【重构】：重构Agent目录关系，增强结构可读性，修改模块内部导入路径，修改目录层级关系,修改引用关系
-  - 【重构】：重构flask框架，增加blueprint，增加app目录，修改causalchat主文件，适配目前APP文件目录，修改模块内部导入路径
+  - 【重构】：重构flask框架，增加blueprint，增加app目录，修改CausalAgent主文件，适配目前APP文件目录，修改模块内部导入路径
   - 【bug修复】：修复docker由于目录重置导致的问题，修改目录关系
 
 

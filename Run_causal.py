@@ -12,7 +12,7 @@ if __name__ == '__main__':
     try:
         # 创建一个 webview 窗口来加载远程 URL
         window = webview.create_window(
-            'CausalChat',  # 窗口标题
+            'CausalAgent',  # 窗口标题
             remote_app_url,
             width=1200,           # 窗口宽度
             height=800,           # 窗口高度

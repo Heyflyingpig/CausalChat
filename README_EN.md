@@ -1,11 +1,11 @@
 [English](README_EN.md) | [简体中文](README.md)
 
 <p align="center">
-  <img src="./readme_img/causalchat.png" alt="CausalChat Logo">
+  <img src="./readme_img/CausalAgent.png" alt="CausalAgent Logo">
 </p>
 
 <h1 align="center">
-CausalChat
+CausalAgent
 </h1>
 
 <p align="center">
@@ -29,17 +29,17 @@ CausalChat
 
 <br>
 
-*Upload your dataset, and CausalChat will automatically select suitable causal analysis algorithms for you, generate an interactive dialogue interface, and produce a professional analysis report.*
+*Upload your dataset, and CausalAgent will automatically select suitable causal analysis algorithms for you, generate an interactive dialogue interface, and produce a professional analysis report.*
 
 > [!IMPORTANT]
 > **Project in active development**
-> We are upgrading the core architecture of CausalChat. Features are evolving quickly. **Please Star the repo to follow future updates.**
+> We are upgrading the core architecture of CausalAgent. Features are evolving quickly. **Please Star the repo to follow future updates.**
 
 ## Table of Contents
 
 - [Table of Contents](#table-of-contents)
-- [What is CausalChat](#what-is-causalchat)
-- [Why CausalChat](#why-causalchat)
+- [What is CausalAgent](#what-is-causalagent)
+- [Why CausalAgent](#why-causalagent)
 - [Tech Stack](#tech-stack)
 - [Showcase](#showcase)
 - [Core Capabilities](#core-capabilities)
@@ -56,23 +56,23 @@ CausalChat
 - [Star History](#star-history)
 - [Changelog](#changelog)
 
-## What is CausalChat
+## What is CausalAgent
 
-**A new generation causal analysis agent.** CausalChat integrates multiple agents built on LangGraph to perform end-to-end causal analysis on tabular data.
+**A new generation causal analysis agent.** CausalAgent integrates multiple agents built on LangGraph to perform end-to-end causal analysis on tabular data.
 
-You only need to upload your data. CausalChat will:
+You only need to upload your data. CausalAgent will:
 
 - Inspect and profile your dataset.
 - Discover causal structures.
 - Perform post-processing and quality checks.
 - Generate interactive causal graphs and a structured, human-readable report.
 
-## Why CausalChat
+## Why CausalAgent
 
 | Feature | Description |
 | :--- | :--- |
 | **Agent-driven** | Multi-agent orchestration based on LangGraph. Tasks are automatically routed; you do not need to handle algorithm details manually. |
-| **Dynamic causal graphs** | Instead of static images, CausalChat renders interactive network graphs. You can drag nodes, zoom, and click to inspect details. |
+| **Dynamic causal graphs** | Instead of static images, CausalAgent renders interactive network graphs. You can drag nodes, zoom, and click to inspect details. |
 | **MCP-based architecture** | Uses **Model Context Protocol (MCP)** to decouple core logic from tools, making it easy to extend new algorithms. |
 | **RAG enhanced** | A domain-specific knowledge base for causal inference is integrated to ensure the generated reports are rigorous and well grounded. |
 
@@ -96,7 +96,7 @@ You only need to upload your data. CausalChat will:
 
 ## Core Capabilities
 
-The overall pipeline of CausalChat can be summarized as:
+The overall pipeline of CausalAgent can be summarized as:
 
 **Upload data → Pre-process & data health check → Causal structure learning → Post-processing & quality enhancement → Report & visualization.**
 
@@ -144,8 +144,8 @@ Here is a brief guide. For more detailed, Chinese step-by-step instructions (inc
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/Heyflyingpig/CausalChat
-   cd CausalChat
+   git clone https://github.com/Heyflyingpig/CausalAgent
+   cd CausalAgent
    ```
 
 2. Create a `.env` file in the project root and fill in environment variables such as `SECRET_KEY`, `API_KEY`, `MYSQL_HOST`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`, etc.
@@ -180,7 +180,7 @@ Here is a brief guide. For more detailed, Chinese step-by-step instructions (inc
 6. Start the backend service:
 
    ```bash
-   python Causalchat.py
+   python CausalAgent.py
    ```
 
 7. In another terminal, start the desktop frontend:
@@ -202,7 +202,7 @@ Contributions via Issues and Pull Requests are welcome.
 
 ```text
 .
-├── Causalchat.py           # Flask entrypoint
+├── CausalAgent.py           # Flask entrypoint
 ├── Run_causal.py           # Desktop entrypoint (pywebview)
 ├── requirements.txt        # Full dependencies
 ├── requirements-base.txt   # Base dependencies (docker/production)
@@ -221,7 +221,7 @@ Contributions via Issues and Pull Requests are welcome.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalChat&type=Date)](https://star-history.com/#Heyflyingpig/CausalChat&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalAgent&type=Date)](https://star-history.com/#Heyflyingpig/CausalAgent&Date)
 
 ## Changelog
 
